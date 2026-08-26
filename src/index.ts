@@ -19,7 +19,7 @@ import { foldPae, isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
 
 export const name = 'plan-and-execute'
-export const inject = ['tools', 'commands', 'systemPrompt']
+export const inject = ['tools', 'systemPrompt']
 
 export interface Config {
   /** 步骤级失败策略：默认暂停问人。 */
@@ -88,41 +88,46 @@ export function apply(ctx: Context, config: Config): void {
     return orchestrator
   }
 
-  // —— 命令入口 ——
-  ctx.commands.register({
-    name: 'plan-and-execute',
-    description: 'Plan-and-Execute：规划 → 审批 → 逐步执行（支持确认点与失败暂停）',
-    input: { hint: '<任务描述>' },
-    handler: ({ agent, rawInput }) => {
-      const task = rawInput.trim()
-      if (task === '') {
-        return { kind: 'error', text: '请提供任务描述：/plan-and-execute <任务>' }
-      }
-      if (ctx.get('userQuestions') === undefined) {
-        return { kind: 'error', text: '当前部署没有用户交互通道（userQuestions），无法审批计划' }
-      }
-      if (agent.status !== 'idle') {
-        return { kind: 'error', text: `agent 正忙（${agent.status}），请等当前回合结束后再启动` }
-      }
-      if (isPlanModeActive(agent.session.events)) {
-        return { kind: 'error', text: 'plan-mode 处于激活状态，请先 /plan off（两者互斥）' }
-      }
-      const folded = foldPae(agent.session.events)
-      if (folded.phase === 'planning' || folded.phase === 'executing') {
-        return {
-          kind: 'error',
-          text: '本会话已有进行中的 plan-and-execute 编排（暂停态可再次输入 /plan-and-execute 重新弹出选项）',
+  // —— 命令入口（命令注册表为可选服务：headless 部署无 commands 时插件仍可加载）——
+  ctx.inject(['commands'], (commandCtx) =>
+    commandCtx.commands.register({
+      name: 'plan-and-execute',
+      description: 'Plan-and-Execute：规划 → 审批 → 逐步执行（支持确认点与失败暂停）',
+      input: { hint: '<任务描述>' },
+      handler: ({ agent, rawInput }) => {
+        const task = rawInput.trim()
+        if (task === '') {
+          return { kind: 'error', text: '请提供任务描述：/plan-and-execute <任务>' }
         }
-      }
-      const orchestrator = ensure(agent)
-      if (folded.phase === 'paused') {
-        void orchestrator.revive()
-        return { kind: 'success', text: '已重新弹出暂停选项。' }
-      }
-      orchestrator.begin(task)
-      return { kind: 'success', text: 'Plan-and-Execute 已启动：进入规划阶段，等待模型提交计划。' }
-    },
-  })
+        if (ctx.get('userQuestions') === undefined) {
+          return { kind: 'error', text: '当前部署没有用户交互通道（userQuestions），无法审批计划' }
+        }
+        if (agent.status !== 'idle') {
+          return { kind: 'error', text: `agent 正忙（${agent.status}），请等当前回合结束后再启动` }
+        }
+        if (isPlanModeActive(agent.session.events)) {
+          return { kind: 'error', text: 'plan-mode 处于激活状态，请先 /plan off（两者互斥）' }
+        }
+        const folded = foldPae(agent.session.events)
+        if (folded.phase === 'planning' || folded.phase === 'executing') {
+          return {
+            kind: 'error',
+            text: '本会话已有进行中的 plan-and-execute 编排（暂停态可再次输入 /plan-and-execute 重新弹出选项）',
+          }
+        }
+        const orchestrator = ensure(agent)
+        if (folded.phase === 'paused') {
+          void orchestrator.revive()
+          return { kind: 'success', text: '已重新弹出暂停选项。' }
+        }
+        orchestrator.begin(task)
+        return {
+          kind: 'success',
+          text: 'Plan-and-Execute 已启动：进入规划阶段，等待模型提交计划。',
+        }
+      },
+    }),
+  )
 
   // —— 模型侧工具 ——
   const lookup = (session: object): Orchestrator | undefined => orchestrators.get(session)

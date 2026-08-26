@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PaePhase } from '../src/state.ts'
 
-/** 最小假 ctx：捕获注册项。 */
+/** 最小假 ctx：捕获注册项。inject 同步执行 setup 并回传 ctx 本体。 */
 function fakeCtx() {
   const registered = {
     commands: [] as Array<Record<string, unknown>>,
@@ -10,7 +10,7 @@ function fakeCtx() {
     sections: [] as unknown[],
   }
   const listeners: Array<{ event: string; handler: (payload: unknown) => void }> = []
-  return {
+  const ctx = {
     registered,
     listeners,
     commands: {
@@ -35,10 +35,15 @@ function fakeCtx() {
       listeners.push({ event, handler })
       return () => {}
     },
+    inject: (_services: string[], setup: (child: unknown) => void) => {
+      setup(ctx)
+      return () => {}
+    },
     get: vi.fn<(key: string) => unknown>(() => ({ ask: async () => ({ answers: [] }) })),
     effect: vi.fn(() => () => {}),
     logger: { info: () => {}, warn: () => {} },
   }
+  return ctx
 }
 
 const fakeAgent = (phase: 'none' | PaePhase) => {
