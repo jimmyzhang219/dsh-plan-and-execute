@@ -42,7 +42,9 @@ describe('classifyStepOutcome', () => {
 describe('decideAction', () => {
   const policy = { onStepFailure: 'pause' as const, maxAutoRecoveries: 2 }
   it('done → advance；aborted → pause(cancelled)', () => {
-    expect(decideAction('done', { nudged: false, recoveries: 0, policy })).toEqual({ kind: 'advance' })
+    expect(decideAction('done', { nudged: false, recoveries: 0, policy })).toEqual({
+      kind: 'advance',
+    })
     expect(decideAction('aborted', { nudged: false, recoveries: 0, policy })).toEqual({
       kind: 'pause',
       reason: 'cancelled',

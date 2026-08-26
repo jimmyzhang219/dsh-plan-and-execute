@@ -136,32 +136,36 @@ export class Orchestrator {
     }
     const check = await validateManifest(this.deps.planDir, steps)
     if (!check.ok) {
-      const lines = check.issues.map(issue =>
-        `- ${issue.file === '' ? '(整体)' : issue.file}: ${issue.problem}`)
+      const lines = check.issues.map(
+        (issue) => `- ${issue.file === '' ? '(整体)' : issue.file}: ${issue.problem}`,
+      )
       return { approved: false, error: `计划文件校验失败，请修复后重新提交：\n${lines.join('\n')}` }
     }
-    const answer = await this.askOrDismiss([{
-      id: 'pae-approve',
-      header: 'Plan review',
-      question: `批准此计划（共 ${steps.length} 步）并开始执行？`,
-      detail: planReviewDetail(steps, this.deps.planDir),
-      options: [
-        { label: APPROVE_LABEL, description: '离开规划阶段，开始逐步执行' },
-        { label: KEEP_LABEL, description: '留在规划阶段；你的反馈将回给模型修改后重新提交' },
-      ],
-      intent: { kind: 'plan-review', approve: APPROVE_LABEL },
-    }])
+    const answer = await this.askOrDismiss([
+      {
+        id: 'pae-approve',
+        header: 'Plan review',
+        question: `批准此计划（共 ${steps.length} 步）并开始执行？`,
+        detail: planReviewDetail(steps, this.deps.planDir),
+        options: [
+          { label: APPROVE_LABEL, description: '离开规划阶段，开始逐步执行' },
+          { label: KEEP_LABEL, description: '留在规划阶段；你的反馈将回给模型修改后重新提交' },
+        ],
+        intent: { kind: 'plan-review', approve: APPROVE_LABEL },
+      },
+    ])
     if (answer === 'dismissed') {
       return { approved: false, error: '用户暂时搁置了审批。留在规划阶段，等待用户下一条消息。' }
     }
-    const item = answer.answers.find(entry => entry.id === 'pae-approve')
+    const item = answer.answers.find((entry) => entry.id === 'pae-approve')
     if (item?.selected[0] !== APPROVE_LABEL) {
       const feedback = item?.custom?.trim()
       return {
         approved: false,
-        error: feedback && feedback !== ''
-          ? `用户要求继续修改计划，反馈：${feedback}`
-          : '用户要求继续修改计划；请调整后重新提交。',
+        error:
+          feedback && feedback !== ''
+            ? `用户要求继续修改计划，反馈：${feedback}`
+            : '用户要求继续修改计划；请调整后重新提交。',
       }
     }
     const plan: PaePlanPayload = {
@@ -325,20 +329,22 @@ export class Orchestrator {
       planDir: plan.planDir,
       task: this.folded().task,
     })
-    const answer = await this.askOrDismiss([{
-      id: 'pae-pause',
-      header: 'Plan-and-Execute 已暂停',
-      question: `第 ${stepIndex}/${plan.steps.length} 步暂停（${reason}）：${diagnostic}`,
-      options: [
-        { label: PAUSE_RETRY, description: '重新注入本步指令再执行一次' },
-        { label: PAUSE_SKIP, description: '跳过本步（todo 保持 pending，终局标注 skipped）' },
-        { label: PAUSE_NEXT, description: '接受现状，继续下一步' },
-        { label: PAUSE_REPLAN, description: '回到规划阶段修改计划（可在弹窗输入反馈）' },
-        { label: PAUSE_TERMINATE, description: '终止整个编排' },
-      ],
-    }])
+    const answer = await this.askOrDismiss([
+      {
+        id: 'pae-pause',
+        header: 'Plan-and-Execute 已暂停',
+        question: `第 ${stepIndex}/${plan.steps.length} 步暂停（${reason}）：${diagnostic}`,
+        options: [
+          { label: PAUSE_RETRY, description: '重新注入本步指令再执行一次' },
+          { label: PAUSE_SKIP, description: '跳过本步（todo 保持 pending，终局标注 skipped）' },
+          { label: PAUSE_NEXT, description: '接受现状，继续下一步' },
+          { label: PAUSE_REPLAN, description: '回到规划阶段修改计划（可在弹窗输入反馈）' },
+          { label: PAUSE_TERMINATE, description: '终止整个编排' },
+        ],
+      },
+    ])
     if (answer === 'dismissed') return 'dismissed'
-    const item = answer.answers.find(entry => entry.id === 'pae-pause')
+    const item = answer.answers.find((entry) => entry.id === 'pae-pause')
     const label = item?.selected[0]
     this.lastFeedback = item?.custom?.trim() ?? ''
     if (label === PAUSE_RETRY) return 'retry'
@@ -369,20 +375,22 @@ export class Orchestrator {
       planDir: plan.planDir,
       task: this.folded().task,
     })
-    const answer = await this.askOrDismiss([{
-      id: 'pae-confirm',
-      header: 'Plan-and-Execute 确认点',
-      question: `即将执行第 ${i}/${plan.steps.length} 步：${step?.title ?? ''}`,
-      detail: `步骤文件：${plan.planDir}/${step?.file ?? ''}`,
-      options: [
-        { label: CONFIRM_CONTINUE, description: '执行本步' },
-        { label: PAUSE_SKIP, description: '跳过本步（终局标注 skipped）' },
-        { label: PAUSE_REPLAN, description: '回到规划阶段修改计划' },
-        { label: PAUSE_TERMINATE, description: '终止整个编排' },
-      ],
-    }])
+    const answer = await this.askOrDismiss([
+      {
+        id: 'pae-confirm',
+        header: 'Plan-and-Execute 确认点',
+        question: `即将执行第 ${i}/${plan.steps.length} 步：${step?.title ?? ''}`,
+        detail: `步骤文件：${plan.planDir}/${step?.file ?? ''}`,
+        options: [
+          { label: CONFIRM_CONTINUE, description: '执行本步' },
+          { label: PAUSE_SKIP, description: '跳过本步（终局标注 skipped）' },
+          { label: PAUSE_REPLAN, description: '回到规划阶段修改计划' },
+          { label: PAUSE_TERMINATE, description: '终止整个编排' },
+        ],
+      },
+    ])
     if (answer === 'dismissed') return 'dismissed'
-    const label = answer.answers.find(entry => entry.id === 'pae-confirm')?.selected[0]
+    const label = answer.answers.find((entry) => entry.id === 'pae-confirm')?.selected[0]
     if (label === PAUSE_SKIP) return 'skip'
     if (label === PAUSE_REPLAN) return 'replan'
     if (label === PAUSE_TERMINATE) return 'terminate'
@@ -430,40 +438,48 @@ export class Orchestrator {
       const plan = foldPaePlan(this.session.events)
       if (plan === undefined) return
       const i = Math.max(1, folded.stepIndex ?? 1)
-      const answer = await this.askOrDismiss([{
-        id: 'pae-resume',
-        header: 'Plan-and-Execute 恢复',
-        question: `编排在上次执行到第 ${i}/${plan.steps.length} 步时中断。从断点继续？`,
-        options: [
-          { label: '从断点继续', description: '重新注入当前步骤指令（以步为原子单位续跑）' },
-          { label: PAUSE_REPLAN, description: '回到规划阶段修改计划' },
-          { label: PAUSE_TERMINATE, description: '终止编排' },
-        ],
-      }])
+      const answer = await this.askOrDismiss([
+        {
+          id: 'pae-resume',
+          header: 'Plan-and-Execute 恢复',
+          question: `编排在上次执行到第 ${i}/${plan.steps.length} 步时中断。从断点继续？`,
+          options: [
+            { label: '从断点继续', description: '重新注入当前步骤指令（以步为原子单位续跑）' },
+            { label: PAUSE_REPLAN, description: '回到规划阶段修改计划' },
+            { label: PAUSE_TERMINATE, description: '终止编排' },
+          ],
+        },
+      ])
       if (answer === 'dismissed') return
-      const label = answer.answers.find(entry => entry.id === 'pae-resume')?.selected[0]
+      const label = answer.answers.find((entry) => entry.id === 'pae-resume')?.selected[0]
       if (label === '从断点继续') return this.run(plan, i)
       if (label === PAUSE_REPLAN) return this.enterReplan(plan, '')
       if (label === PAUSE_TERMINATE) return this.finish('aborted', plan)
       return
     }
     if (folded.phase === 'planning') {
-      const answer = await this.askOrDismiss([{
-        id: 'pae-resume',
-        header: 'Plan-and-Execute 恢复',
-        question: '编排在规划阶段中断，继续规划？',
-        options: [
-          { label: '继续规划', description: '提示模型继续完成步骤文件并提交审批' },
-          { label: PAUSE_TERMINATE, description: '终止编排' },
-        ],
-      }])
+      const answer = await this.askOrDismiss([
+        {
+          id: 'pae-resume',
+          header: 'Plan-and-Execute 恢复',
+          question: '编排在规划阶段中断，继续规划？',
+          options: [
+            { label: '继续规划', description: '提示模型继续完成步骤文件并提交审批' },
+            { label: PAUSE_TERMINATE, description: '终止编排' },
+          ],
+        },
+      ])
       if (answer === 'dismissed') return
-      const label = answer.answers.find(entry => entry.id === 'pae-resume')?.selected[0]
+      const label = answer.answers.find((entry) => entry.id === 'pae-resume')?.selected[0]
       if (label === '继续规划') {
         this.deps.agent.steer(resumePlanningInstruction())
         this.armApproval()
       } else if (label === PAUSE_TERMINATE) {
-        this.append('pae/state', { phase: 'aborted', task: folded.task, planDir: this.deps.planDir })
+        this.append('pae/state', {
+          phase: 'aborted',
+          task: folded.task,
+          planDir: this.deps.planDir,
+        })
       }
     }
   }
@@ -477,13 +493,15 @@ export class Orchestrator {
         if (!this.skipped.has(k)) this.statuses.set(k, 'completed')
       }
       this.append('todo/write', buildTodoPayload(plan.steps, this.statuses))
-      void this.askOrDismiss([{
-        id: 'pae-done',
-        header: 'Plan-and-Execute 完成',
-        question: '计划已全部执行完成。',
-        detail: completionDetail(plan.steps, foldStepReports(this.session.events), this.skipped),
-        options: [{ label: DONE_ACK, description: '关闭通知' }],
-      }])
+      void this.askOrDismiss([
+        {
+          id: 'pae-done',
+          header: 'Plan-and-Execute 完成',
+          question: '计划已全部执行完成。',
+          detail: completionDetail(plan.steps, foldStepReports(this.session.events), this.skipped),
+          options: [{ label: DONE_ACK, description: '关闭通知' }],
+        },
+      ])
     }
   }
 

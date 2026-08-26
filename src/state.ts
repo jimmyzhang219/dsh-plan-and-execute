@@ -74,7 +74,9 @@ export function foldPaePlan(events: readonly SessionEvent[]): PaePlanPayload | u
   return plan
 }
 
-export function foldStepReports(events: readonly SessionEvent[]): Map<number, PaeStepReportPayload> {
+export function foldStepReports(
+  events: readonly SessionEvent[],
+): Map<number, PaeStepReportPayload> {
   const reports = new Map<number, PaeStepReportPayload>()
   for (const event of events) {
     if (event.type === 'pae/step-report') reports.set(event.data.stepIndex, event.data)

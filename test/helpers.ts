@@ -9,7 +9,7 @@ import type { DriveAgent, DriveSession, PaeEventType } from '../src/orchestrator
 export const tempDirs: string[] = []
 
 export async function cleanupTempDirs(): Promise<void> {
-  await Promise.all(tempDirs.map(dir => rm(dir, { recursive: true, force: true })))
+  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
 }
 
 /** 假 Session：内存事件数组。 */
@@ -42,7 +42,7 @@ export class FakeAgent implements DriveAgent {
       next()
       return Promise.resolve()
     }
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       this.waiter = resolve
     })
   }
@@ -85,11 +85,9 @@ export function fakeAsk(...answers: Array<AskUserQuestionAnswer | Error>): {
   }
 }
 
-export const answer = (
-  id: string,
-  selected: string,
-  custom?: string,
-): AskUserQuestionAnswer => ({ answers: [{ id, selected: [selected], custom }] })
+export const answer = (id: string, selected: string, custom?: string): AskUserQuestionAnswer => ({
+  answers: [{ id, selected: [selected], custom }],
+})
 
 export type StepSeed = { file: string; title: string; requiresConfirmation?: boolean }
 
@@ -132,18 +130,22 @@ export class FakeRevivedSession {
   constructor() {
     this.planDir = mkdtempSync(join(tmpdir(), 'pae-revive-'))
     tempDirs.push(this.planDir)
-    for (const file of ['a.md', 'b.md']) writeFileSync(join(this.planDir, file), '# step\n内容', 'utf8')
+    for (const file of ['a.md', 'b.md'])
+      writeFileSync(join(this.planDir, file), '# step\n内容', 'utf8')
     const s = this.agent.session as FakeSession
     s.append('pae/plan', {
       planDir: this.planDir,
-      steps: [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+      steps: [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
     })
     s.append('pae/state', { phase: 'executing', stepIndex: 1, planDir: this.planDir, task: 'T' })
   }
 
   readonly ask = async (questions: AskUserQuestionItem[]): Promise<AskUserQuestionAnswer> => {
     this.receivedQuestions.push(questions)
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       this.resolver = resolve
     })
   }

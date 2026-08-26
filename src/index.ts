@@ -34,9 +34,7 @@ export const Config: Schema<Config> = Schema.object({
   onStepFailure: Schema.union(['pause', 'auto-recover'])
     .description('步骤失败策略')
     .default('pause'),
-  maxAutoRecoveries: Schema.number()
-    .description('单步自愈次数上限（仅 auto-recover）')
-    .default(2),
+  maxAutoRecoveries: Schema.number().description('单步自愈次数上限（仅 auto-recover）').default(2),
   planDir: Schema.string().description('计划文件根目录（相对会话 cwd）').default('.pae'),
 })
 
@@ -46,12 +44,12 @@ function toDriveAgent(agent: Agent): DriveAgent {
   const drive: DriveSession = {
     events: session.events,
     append: (eventType, data) => {
-      (session.append as unknown as (t: string, d: object) => void)(eventType, data)
+      ;(session.append as unknown as (t: string, d: object) => void)(eventType, data)
     },
   }
   return {
     session: drive,
-    steer: message => agent.steer(message),
+    steer: (message) => agent.steer(message),
     whenIdle: () => agent.whenIdle(),
   }
 }
@@ -70,7 +68,10 @@ export function apply(ctx: Context, config: Config): void {
     const existing = orchestrators.get(agent.session as object)
     if (existing !== undefined) return existing
     const cwd = agent.session.header.cwd ?? process.cwd()
-    const runToken = new Date().toISOString().replaceAll(/[-:TZ.]/g, '').slice(0, 14)
+    const runToken = new Date()
+      .toISOString()
+      .replaceAll(/[-:TZ.]/g, '')
+      .slice(0, 14)
     const planDir = `${cwd}/${config.planDir}/${String(agent.id)}/${runToken}`
     const orchestrator = new Orchestrator({
       agent: toDriveAgent(agent),
@@ -132,7 +133,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'pae:planning',
     order: 50,
-    text: context => {
+    text: (context) => {
       const agent = context.agent
       if (agent === undefined) return ''
       const folded = foldPae(agent.session.events)
@@ -142,7 +143,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'pae:executing',
     order: 51,
-    text: context => {
+    text: (context) => {
       const agent = context.agent
       if (agent === undefined) return ''
       const folded = foldPae(agent.session.events)
@@ -155,7 +156,8 @@ export function apply(ctx: Context, config: Config): void {
   // —— 重启/重建恢复：agent/created 时折叠状态，中断态弹恢复交互 ——
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     const folded = foldPae(agent.session.events)
-    if (folded.phase === 'none' || folded.phase === 'completed' || folded.phase === 'aborted') return
+    if (folded.phase === 'none' || folded.phase === 'completed' || folded.phase === 'aborted')
+      return
     const orchestrator = ensure(agent)
     void orchestrator.revive()
   })

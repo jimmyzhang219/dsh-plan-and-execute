@@ -28,7 +28,7 @@ describe('主执行路径', () => {
     })
     orchestrator.begin('做某事')
     expect(agent.steered).toHaveLength(1)
-    const state = agent.session.events.find(e => e.type === 'pae/state')
+    const state = agent.session.events.find((e) => e.type === 'pae/state')
     expect(state?.data).toMatchObject({ phase: 'planning', task: '做某事', planDir })
   })
 
@@ -42,10 +42,10 @@ describe('主执行路径', () => {
     agent.scriptTurn('completed', { outcome: 'done', summary: '完成 A' }, 1)
     agent.scriptTurn('completed', { outcome: 'done', summary: '完成 B' }, 2)
     await vi.waitFor(() => {
-      const last = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const last = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(last?.data).toMatchObject({ phase: 'completed' })
     })
-    const todos = [...agent.session.events].reverse().find(e => e.type === 'todo/write')
+    const todos = [...agent.session.events].reverse().find((e) => e.type === 'todo/write')
     expect(todos?.data).toMatchObject({
       todos: [
         { content: '1. A', status: 'completed' },
@@ -53,7 +53,7 @@ describe('主执行路径', () => {
       ],
     })
     // kickoff + 两条步骤指令
-    expect(agent.steered.filter(m => m.source.kind === 'plugin')).toHaveLength(3)
+    expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(3)
   })
 
   it('submitPlan 驳回：反馈文本返回给工具层抛错', async () => {
@@ -75,28 +75,31 @@ describe('异常路径', () => {
     agent.scriptTurn('completed', undefined) // 第一次：无 report
     agent.scriptTurn('completed', { outcome: 'done', summary: '补报' }, 1) // 追问后：补报
     await vi.waitFor(() => {
-      const last = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const last = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(last?.data).toMatchObject({ phase: 'completed' })
     })
-    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
-    expect(texts.some(t => t.includes('report_step'))).toBe(true)
+    const texts = agent.steered.map((m) => (m.content[0] as { text: string }).text)
+    expect(texts.some((t) => t.includes('report_step'))).toBe(true)
   })
 })
 
 describe('暂停与恢复决策', () => {
   it('blocked → 五选项；重试 → 同一步重新注入指令', async () => {
     const { agent } = await makeOrchestrator(
-      [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
       [answer('pae-approve', '批准'), answer('pae-pause', '重试该步')],
     )
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '卡住' }, 1)
     agent.scriptTurn('completed', { outcome: 'done', summary: '重试成功' }, 1)
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'executing', stepIndex: 2 })
     })
-    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
-    expect(texts.filter(t => t.includes('执行计划第 1/2 步')).length).toBe(2) // 同一步注入两次
+    const texts = agent.steered.map((m) => (m.content[0] as { text: string }).text)
+    expect(texts.filter((t) => t.includes('执行计划第 1/2 步')).length).toBe(2) // 同一步注入两次
   })
 
   it('turn aborted（用户取消）→ paused(cancelled)，弹窗被关 → dismissed 保持暂停', async () => {
@@ -106,7 +109,7 @@ describe('暂停与恢复决策', () => {
     )
     agent.scriptTurn('aborted')
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'paused', pausedReason: 'cancelled' })
     })
   })
@@ -119,12 +122,12 @@ describe('暂停与恢复决策', () => {
     agent.scriptTurn('completed', undefined)
     agent.scriptTurn('completed', undefined) // 追问后仍无 report
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'aborted' })
     })
     // 事件序列中曾出现 paused(failure)（ask 脚本化无延迟，随即被 aborted 覆盖）
     const paused = agent.session.events.find(
-      e => e.type === 'pae/state' && e.data.phase === 'paused',
+      (e) => e.type === 'pae/state' && e.data.phase === 'paused',
     )
     expect(paused?.data).toMatchObject({ pausedReason: 'failure' })
   })
@@ -138,26 +141,29 @@ describe('暂停与恢复决策', () => {
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '第一次' }, 1)
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '第二次' }, 1) // 自愈 1 次后仍 blocked → 超限
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'aborted' })
     })
     const paused = agent.session.events.find(
-      e => e.type === 'pae/state' && e.data.phase === 'paused',
+      (e) => e.type === 'pae/state' && e.data.phase === 'paused',
     )
     expect(paused?.data).toMatchObject({ pausedReason: 'failure' })
-    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
-    expect(texts.filter(t => t.includes('自行调整')).length).toBe(1) // 恰好一次自愈指令
+    const texts = agent.steered.map((m) => (m.content[0] as { text: string }).text)
+    expect(texts.filter((t) => t.includes('自行调整')).length).toBe(1) // 恰好一次自愈指令
   })
 
   it('跳过 → todo 保持 pending，终局标注 skipped', async () => {
     const { agent, received } = await makeOrchestrator(
-      [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
       [answer('pae-approve', '批准'), answer('pae-pause', '跳过该步')],
     )
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '卡住' }, 1)
     agent.scriptTurn('completed', { outcome: 'done', summary: 'B 完成' }, 2)
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'completed' })
     })
     // 终局弹窗 detail 含 skipped
@@ -175,13 +181,14 @@ describe('确认点 / replan / revive', () => {
     )
     agent.scriptTurn('completed', { outcome: 'done', summary: 'A 完成' }, 1)
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'completed' })
     })
     expect(received[1]?.[0]?.id).toBe('pae-confirm')
     const pausedEvent = agent.session.events.find(
-      e => e.type === 'pae/state'
-        && (e.data as { pausedReason?: string }).pausedReason === 'confirm-point',
+      (e) =>
+        e.type === 'pae/state' &&
+        (e.data as { pausedReason?: string }).pausedReason === 'confirm-point',
     )
     expect(pausedEvent).toBeDefined()
   })
@@ -192,12 +199,12 @@ describe('确认点 / replan / revive', () => {
       [answer('pae-approve', '批准'), answer('pae-confirm', '跳过该步')],
     )
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'completed' })
     })
     // 没有任何步骤指令被注入（A 被跳过）
-    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
-    expect(texts.some(t => t.includes('执行计划第 1/1 步'))).toBe(false)
+    const texts = agent.steered.map((m) => (m.content[0] as { text: string }).text)
+    expect(texts.some((t) => t.includes('执行计划第 1/1 步'))).toBe(false)
     const doneAsk = received.at(-1)?.[0]
     expect(doneAsk?.id).toBe('pae-done')
     expect(doneAsk?.detail).toContain('skipped')
@@ -210,7 +217,7 @@ describe('确认点 / replan / revive', () => {
     )
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '卡住' }, 1)
     await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
       expect(state?.data).toMatchObject({ phase: 'planning' })
     })
     const last = agent.steered.at(-1)
@@ -233,7 +240,7 @@ describe('确认点 / replan / revive', () => {
     revived.agent.scriptTurn('completed', { outcome: 'done', summary: '续跑' }, 1)
     revived.agent.scriptTurn('completed', { outcome: 'done', summary: '完成' }, 2)
     await revivePromise
-    const state = [...revived.agent.session.events].reverse().find(e => e.type === 'pae/state')
+    const state = [...revived.agent.session.events].reverse().find((e) => e.type === 'pae/state')
     expect(state?.data).toMatchObject({ phase: 'completed' })
   })
 })

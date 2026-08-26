@@ -31,7 +31,11 @@ describe('foldPae', () => {
       ev('turn/start', { turn: 1 }),
       ev('pae/state', { phase: 'paused', pausedReason: 'failure', stepIndex: 3 }),
     ]
-    expect(foldPae(events)).toMatchObject({ phase: 'paused', pausedReason: 'failure', stepIndex: 3 })
+    expect(foldPae(events)).toMatchObject({
+      phase: 'paused',
+      pausedReason: 'failure',
+      stepIndex: 3,
+    })
   })
 })
 
@@ -63,7 +67,13 @@ describe('buildTodoPayload', () => {
       { file: 'a.md', title: 'A' },
       { file: 'b.md', title: 'B' },
     ]
-    const payload = buildTodoPayload(steps, new Map([[1, 'completed'], [2, 'in_progress']]))
+    const payload = buildTodoPayload(
+      steps,
+      new Map([
+        [1, 'completed'],
+        [2, 'in_progress'],
+      ]),
+    )
     expect(payload.todos).toEqual([
       { content: '1. A', status: 'completed' },
       { content: '2. B', status: 'in_progress' },

@@ -41,7 +41,7 @@ describe('validateManifest', () => {
     ])
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.issues.map(i => i.file)).toEqual(['missing.md', 'empty.md', 'subdir'])
+      expect(result.issues.map((i) => i.file)).toEqual(['missing.md', 'empty.md', 'subdir'])
     }
   })
 })

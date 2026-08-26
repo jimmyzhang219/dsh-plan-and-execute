@@ -76,7 +76,10 @@ describe('详情渲染', () => {
   })
   it('completionDetail 汇总各步结局，跳过步标注', () => {
     const detail = completionDetail(
-      [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
       new Map([[1, { stepIndex: 1, outcome: 'done' as const, summary: '完成 A' }]]),
       new Set([2]),
     )
