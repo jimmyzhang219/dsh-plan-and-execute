@@ -53,6 +53,14 @@ export interface ResolvedConfig extends FailurePolicy {
   readonly planRoot: string
 }
 
+/** 编排激活/结束钩子：装配层借此挂接工具可见性控制（如 deny exit_plan_mode）。 */
+export interface OrchestratorHooks {
+  /** 编排激活（begin 或 revive）时调用；可重复调用（幂等）。 */
+  onActivate?(): void
+  /** 编排结束（completed/aborted）时调用。 */
+  onRestore?(): void
+}
+
 export const APPROVE_LABEL = '批准'
 export const KEEP_LABEL = '继续修改'
 export const PAUSE_RETRY = '重试该步'
@@ -78,6 +86,7 @@ export class Orchestrator {
       ask: AskFn
       config: ResolvedConfig
       planDir: string
+      hooks?: OrchestratorHooks
     },
   ) {}
 
@@ -95,6 +104,7 @@ export class Orchestrator {
 
   /** 命令入口：进入规划阶段并注入 kickoff。 */
   begin(task: string): void {
+    this.deps.hooks?.onActivate?.()
     this.append('pae/state', { phase: 'planning', task, planDir: this.deps.planDir })
     this.deps.agent.steer(kickoffInstruction(task, this.deps.planDir))
     this.armApproval()
@@ -404,6 +414,7 @@ export class Orchestrator {
   async revive(): Promise<void> {
     const folded = this.folded()
     if (this.disposed) return
+    this.deps.hooks?.onActivate?.()
     if (folded.phase === 'paused') {
       const reason = folded.pausedReason ?? 'failure'
       const plan = foldPaePlan(this.session.events)
@@ -485,6 +496,7 @@ export class Orchestrator {
   }
 
   private finish(phase: 'completed' | 'aborted', plan: PaePlanPayload): void {
+    this.deps.hooks?.onRestore?.()
     const task = this.folded().task
     this.append('pae/state', { phase, task, planDir: plan.planDir })
     if (phase === 'completed') {

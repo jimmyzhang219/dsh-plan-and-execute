@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-import type { DriveAgent, DriveSession, PaeEventType } from '../src/orchestrator.ts'
+import type { DriveAgent, DriveSession, Orchestrator, PaeEventType } from '../src/orchestrator.ts'
 
 export const tempDirs: string[] = []
 
@@ -96,6 +96,7 @@ export async function makeOrchestrator(
   steps: StepSeed[],
   askScript: Array<AskUserQuestionAnswer | Error>,
   overrides: { onStepFailure?: 'pause' | 'auto-recover'; maxAutoRecoveries?: number } = {},
+  hooks?: ConstructorParameters<typeof Orchestrator>[0]['hooks'],
 ) {
   const planDir = await mkdtemp(join(tmpdir(), 'pae-orch-'))
   tempDirs.push(planDir)
@@ -114,6 +115,7 @@ export async function makeOrchestrator(
       planRoot: '.pae',
     },
     planDir,
+    ...(hooks === undefined ? {} : { hooks }),
   })
   orchestrator.begin('示例任务')
   const verdict = await orchestrator.submitPlan(steps, '测试计划')

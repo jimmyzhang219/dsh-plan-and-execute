@@ -32,6 +32,46 @@ describe('主执行路径', () => {
     expect(state?.data).toMatchObject({ phase: 'planning', task: '做某事', planDir })
   })
 
+  it('begin 触发 onActivate，finish(completed) 触发 onRestore', async () => {
+    const activated: number[] = []
+    const restored: number[] = []
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+      {},
+      {
+        onActivate: () => activated.push(activated.length + 1),
+        onRestore: () => restored.push(restored.length + 1),
+      },
+    )
+    expect(activated).toEqual([1])
+    expect(restored).toEqual([])
+    agent.scriptTurn('completed', { outcome: 'done', summary: '完成' }, 1)
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find((e) => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'completed' })
+    })
+    expect(restored).toEqual([1])
+  })
+
+  it('revive 触发 onActivate（幂等重复激活由装配层负责）', async () => {
+    const revived = new FakeRevivedSession()
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const activated: number[] = []
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      hooks: { onActivate: () => activated.push(1) },
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0)
+    expect(activated).toEqual([1])
+    revived.resolveResume(answer('pae-resume', '终止'))
+    await revivePromise
+  })
+
   it('submitPlan 批准：落 pae/plan + executing + todo 全 pending，逐步执行到完成', async () => {
     const steps: StepSeed[] = [
       { file: 'a.md', title: 'A' },

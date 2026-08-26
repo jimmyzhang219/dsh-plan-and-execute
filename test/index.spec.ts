@@ -63,6 +63,11 @@ const fakeAgent = (phase: 'none' | PaePhase) => {
     status: 'idle',
     steer: vi.fn(),
     whenIdle: async () => {},
+    ctx: {
+      tools: {
+        restrict: vi.fn((_filter: unknown) => () => {}),
+      },
+    },
     session: {
       id: 'sess-1',
       header: { cwd: '/ws' },
@@ -126,5 +131,46 @@ describe('apply 装配', () => {
     expect(result).toMatchObject({ kind: 'success' })
     expect(agent.steer).toHaveBeenCalledTimes(1)
     expect(agent.session.append).toHaveBeenCalled()
+  })
+
+  it('启动编排 → 对该 agent deny exit_plan_mode（agent-scoped restrict）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => unknown
+    const agent = fakeAgent('none')
+    handler({ agent, rawInput: '重构登录模块' })
+    expect(agent.ctx.tools.restrict).toHaveBeenCalledWith({ deny: ['exit_plan_mode'] })
+  })
+
+  it('重复启动（编排未结束时）→ restrict 幂等只调一次', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => unknown
+    const agent = fakeAgent('none')
+    handler({ agent, rawInput: '重构登录模块' })
+    handler({ agent, rawInput: '再来一个' })
+    expect(agent.ctx.tools.restrict).toHaveBeenCalledTimes(1)
+  })
+
+  it('部署无 plan-mode（restrict 抛错）→ 容错，编排正常启动', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => unknown
+    const agent = fakeAgent('none')
+    agent.ctx.tools.restrict.mockImplementationOnce(() => {
+      throw new Error('tools.restrict() names unknown global tool "exit_plan_mode"')
+    })
+    const result = handler({ agent, rawInput: '重构登录模块' })
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(agent.steer).toHaveBeenCalledTimes(1)
   })
 })

@@ -65,6 +65,30 @@ export function apply(ctx: Context, config: Config): void {
     return service.ask({ questions, agent })
   }
 
+  /**
+   * 编排激活时对当前 agent 排除 plan-mode 的 exit_plan_mode 工具（agent-scoped
+   * restrict，不影响其他 agent/会话）。部署未组合 plan-mode 时该工具不在
+   * 全局工具表，restrict 会抛错——此时无需排除，忽略即可。
+   * activate 幂等（restore 后置空，可再次激活）。
+   */
+  const createToolMask = (agent: Agent): { activate: () => void; restore: () => void } => {
+    let dispose: (() => void) | undefined
+    return {
+      activate: () => {
+        if (dispose !== undefined) return
+        try {
+          dispose = agent.ctx.tools.restrict({ deny: ['exit_plan_mode'] })
+        } catch {
+          // 部署无 plan-mode：无可排除的工具，保持现状
+        }
+      },
+      restore: () => {
+        dispose?.()
+        dispose = undefined
+      },
+    }
+  }
+
   const ensure = (agent: Agent): Orchestrator => {
     const existing = orchestrators.get(agent.session as object)
     if (existing !== undefined) return existing
@@ -74,6 +98,7 @@ export function apply(ctx: Context, config: Config): void {
       .replaceAll(/[-:TZ.]/g, '')
       .slice(0, 14)
     const planDir = `${cwd}/${config.planDir}/${String(agent.id)}/${runToken}`
+    const mask = createToolMask(agent)
     const orchestrator = new Orchestrator({
       agent: toDriveAgent(agent),
       ask: askFor(agent),
@@ -83,6 +108,10 @@ export function apply(ctx: Context, config: Config): void {
         planRoot: config.planDir,
       },
       planDir,
+      hooks: {
+        onActivate: mask.activate,
+        onRestore: mask.restore,
+      },
     })
     orchestrators.set(agent.session as object, orchestrator)
     ctx.effect(() => () => orchestrator.dispose(), 'plan-and-execute: dispose orchestrators')
