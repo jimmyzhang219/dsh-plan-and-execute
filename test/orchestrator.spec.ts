@@ -170,3 +170,104 @@ describe('主执行路径', () => {
     if (!verdict.approved) expect(verdict.error).toContain('粒度太粗')
   })
 })
+
+describe('异常路径', () => {
+  it('completed 但未汇报 → 追问一次；补报 done 后继续', async () => {
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+    )
+    agent.scriptTurn('completed', undefined) // 第一次：无 report
+    agent.scriptTurn('completed', { outcome: 'done', summary: '补报' }, 1) // 追问后：补报
+    await vi.waitFor(() => {
+      const last = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(last?.data).toMatchObject({ phase: 'completed' })
+    })
+    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
+    expect(texts.some(t => t.includes('report_step'))).toBe(true)
+  })
+})
+
+describe('暂停与恢复决策', () => {
+  it('blocked → 五选项；重试 → 同一步重新注入指令', async () => {
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '重试该步')],
+    )
+    agent.scriptTurn('completed', { outcome: 'blocked', summary: '卡住' }, 1)
+    agent.scriptTurn('completed', { outcome: 'done', summary: '重试成功' }, 1)
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'executing', stepIndex: 2 })
+    })
+    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
+    expect(texts.filter(t => t.includes('执行计划第 1/2 步')).length).toBe(2) // 同一步注入两次
+  })
+
+  it('turn aborted（用户取消）→ paused(cancelled)，弹窗被关 → dismissed 保持暂停', async () => {
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准'), new Error('dismissed')],
+    )
+    agent.scriptTurn('aborted')
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'paused', pausedReason: 'cancelled' })
+    })
+  })
+
+  it('追问后仍不汇报 → 按失败暂停；选终止 → aborted', async () => {
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '终止')],
+    )
+    agent.scriptTurn('completed', undefined)
+    agent.scriptTurn('completed', undefined) // 追问后仍无 report
+    // 事件序列中曾出现 paused(failure)（ask 脚本化无延迟，随即被 aborted 覆盖）
+    const paused = agent.session.events.find(
+      e => e.type === 'pae/state' && e.data.phase === 'paused',
+    )
+    expect(paused?.data).toMatchObject({ pausedReason: 'failure' })
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'aborted' })
+    })
+  })
+
+  it('auto-recover：限额内自愈，超限升级暂停', async () => {
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '终止')],
+      { onStepFailure: 'auto-recover', maxAutoRecoveries: 1 },
+    )
+    agent.scriptTurn('completed', { outcome: 'blocked', summary: '第一次' }, 1)
+    agent.scriptTurn('completed', { outcome: 'blocked', summary: '第二次' }, 1) // 自愈 1 次后仍 blocked → 超限
+    const paused = agent.session.events.find(
+      e => e.type === 'pae/state' && e.data.phase === 'paused',
+    )
+    expect(paused?.data).toMatchObject({ pausedReason: 'failure' })
+    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
+    expect(texts.filter(t => t.includes('自行调整')).length).toBe(1) // 恰好一次自愈指令
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'aborted' })
+    })
+  })
+
+  it('跳过 → todo 保持 pending，终局标注 skipped', async () => {
+    const { agent, received } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '跳过该步')],
+    )
+    agent.scriptTurn('completed', { outcome: 'blocked', summary: '卡住' }, 1)
+    agent.scriptTurn('completed', { outcome: 'done', summary: 'B 完成' }, 2)
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'completed' })
+    })
+    // 终局弹窗 detail 含 skipped
+    const doneAsk = received.at(-1)?.[0]
+    expect(doneAsk?.id).toBe('pae-done')
+    expect(doneAsk?.detail).toContain('skipped')
+  })
+})
