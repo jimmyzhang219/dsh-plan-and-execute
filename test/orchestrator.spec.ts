@@ -1,3 +1,4 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -271,3 +272,105 @@ describe('暂停与恢复决策', () => {
     expect(doneAsk?.detail).toContain('skipped')
   })
 })
+
+describe('确认点 / replan / revive', () => {
+  it('requiresConfirmation 步前弹四选项确认点，选继续后执行', async () => {
+    const { agent, received } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A', requiresConfirmation: true }],
+      [answer('pae-approve', '批准'), answer('pae-confirm', '继续')],
+    )
+    agent.scriptTurn('completed', { outcome: 'done', summary: 'A 完成' }, 1)
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'completed' })
+    })
+    expect(received[1]?.[0]?.id).toBe('pae-confirm')
+    const pausedEvent = agent.session.events.find(
+      e => e.type === 'pae/state'
+        && (e.data as { pausedReason?: string }).pausedReason === 'confirm-point',
+    )
+    expect(pausedEvent).toBeDefined()
+  })
+
+  it('确认点选跳过 → 该步不执行、终局 skipped', async () => {
+    const { agent, received } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A', requiresConfirmation: true }],
+      [answer('pae-approve', '批准'), answer('pae-confirm', '跳过该步')],
+    )
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'completed' })
+    })
+    // 没有任何步骤指令被注入（A 被跳过）
+    const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
+    expect(texts.some(t => t.includes('执行计划第 1/1 步'))).toBe(false)
+    const doneAsk = received.at(-1)?.[0]
+    expect(doneAsk?.id).toBe('pae-done')
+    expect(doneAsk?.detail).toContain('skipped')
+  })
+
+  it('暂停选回到计划阶段 → planning 状态 + replan 指令（含反馈）', async () => {
+    const { agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '回到计划阶段', '加一步测试')],
+    )
+    agent.scriptTurn('completed', { outcome: 'blocked', summary: '卡住' }, 1)
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'planning' })
+    })
+    const last = agent.steered.at(-1)
+    expect((last?.content[0] as { text: string }).text).toContain('加一步测试')
+  })
+
+  it('revive：executing 中断 → 断点续跑弹窗，从当前步重注入', async () => {
+    const revived = new FakeRevivedSession()
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0)
+    expect(revived.receivedQuestions[0]?.[0]?.id).toBe('pae-resume')
+    revived.resolveResume(answer('pae-resume', '从断点继续'))
+    revived.agent.scriptTurn('completed', { outcome: 'done', summary: '续跑' }, 1)
+    revived.agent.scriptTurn('completed', { outcome: 'done', summary: '完成' }, 2)
+    await revivePromise
+    const state = [...revived.agent.session.events].reverse().find(e => e.type === 'pae/state')
+    expect(state?.data).toMatchObject({ phase: 'completed' })
+  })
+})
+
+/** 带"重启后"历史事件（plan + executing）的可控假件：ask 由测试手动 resolve。 */
+class FakeRevivedSession {
+  readonly agent = new FakeAgent()
+  readonly planDir: string
+  receivedQuestions: AskUserQuestionItem[][] = []
+  private resolver: ((value: AskUserQuestionAnswer) => void) | undefined
+
+  constructor() {
+    this.planDir = mkdtempSync(join(tmpdir(), 'pae-revive-'))
+    tempDirs.push(this.planDir)
+    for (const file of ['a.md', 'b.md']) writeFileSync(join(this.planDir, file), '# step\n内容', 'utf8')
+    const s = this.agent.session as FakeSession
+    s.append('pae/plan', {
+      planDir: this.planDir,
+      steps: [{ file: 'a.md', title: 'A' }, { file: 'b.md', title: 'B' }],
+    })
+    s.append('pae/state', { phase: 'executing', stepIndex: 1, planDir: this.planDir, task: 'T' })
+  }
+
+  readonly ask = async (questions: AskUserQuestionItem[]): Promise<AskUserQuestionAnswer> => {
+    this.receivedQuestions.push(questions)
+    return new Promise(resolve => {
+      this.resolver = resolve
+    })
+  }
+
+  resolveResume(value: AskUserQuestionAnswer): void {
+    this.resolver?.(value)
+  }
+}

@@ -20,11 +20,13 @@ import {
   planReviewDetail,
   recoverInstruction,
   replanInstruction,
+  resumePlanningInstruction,
   stepInstruction,
 } from './prompts.ts'
 import {
   buildTodoPayload,
   foldPae,
+  foldPaePlan,
   foldStepReports,
   type PaePausedReason,
   type PaePlanPayload,
@@ -242,6 +244,21 @@ export class Orchestrator {
         }
         return // retry / dismissed 都不合适结构性问题：保持 paused
       }
+      // 确认点：风险步骤执行前弹四选项
+      if (step.requiresConfirmation === true) {
+        const choice = await this.confirmChoice(i, plan)
+        if (choice === 'dismissed') return // 保持 paused(confirm-point)，等 revive/命令重入
+        if (choice === 'skip') {
+          this.skipped.add(i)
+          i += 1
+          nudged = false
+          recoveries = 0
+          continue
+        }
+        if (choice === 'replan') return this.enterReplan(plan, choice)
+        if (choice === 'terminate') return this.finish('aborted', plan)
+        // continue → 落到下方 executing
+      }
       this.append('pae/state', {
         phase: 'executing',
         stepIndex: i,
@@ -337,6 +354,118 @@ export class Orchestrator {
     this.append('pae/state', { phase: 'planning', task, planDir: plan.planDir })
     this.deps.agent.steer(replanInstruction(this.lastFeedback, plan.steps.length))
     this.armApproval()
+  }
+
+  /** 确认点弹窗（四选项），run() 与 revive 复用。 */
+  private async confirmChoice(
+    i: number,
+    plan: PaePlanPayload,
+  ): Promise<'continue' | 'skip' | 'replan' | 'terminate' | 'dismissed'> {
+    const step = plan.steps[i - 1]
+    this.append('pae/state', {
+      phase: 'paused',
+      pausedReason: 'confirm-point',
+      stepIndex: i,
+      planDir: plan.planDir,
+      task: this.folded().task,
+    })
+    const answer = await this.askOrDismiss([{
+      id: 'pae-confirm',
+      header: 'Plan-and-Execute 确认点',
+      question: `即将执行第 ${i}/${plan.steps.length} 步：${step?.title ?? ''}`,
+      detail: `步骤文件：${plan.planDir}/${step?.file ?? ''}`,
+      options: [
+        { label: CONFIRM_CONTINUE, description: '执行本步' },
+        { label: PAUSE_SKIP, description: '跳过本步（终局标注 skipped）' },
+        { label: PAUSE_REPLAN, description: '回到规划阶段修改计划' },
+        { label: PAUSE_TERMINATE, description: '终止整个编排' },
+      ],
+    }])
+    if (answer === 'dismissed') return 'dismissed'
+    const label = answer.answers.find(entry => entry.id === 'pae-confirm')?.selected[0]
+    if (label === PAUSE_SKIP) return 'skip'
+    if (label === PAUSE_REPLAN) return 'replan'
+    if (label === PAUSE_TERMINATE) return 'terminate'
+    return 'continue'
+  }
+
+  /**
+   * 恢复入口（agent/created 重建、或 paused 态命令重入）。按折叠状态弹
+   * 对应交互并续跑；driver 由本方法自身充当。
+   */
+  async revive(): Promise<void> {
+    const folded = this.folded()
+    if (this.disposed) return
+    if (folded.phase === 'paused') {
+      const reason = folded.pausedReason ?? 'failure'
+      const plan = foldPaePlan(this.session.events)
+      const i = folded.stepIndex ?? 1
+      if (plan === undefined) return
+      if (reason === 'confirm-point') {
+        const choice = await this.confirmChoice(i, plan)
+        if (choice === 'dismissed') return
+        if (choice === 'skip') {
+          this.skipped.add(i)
+          return this.run(plan, i + 1)
+        }
+        if (choice === 'replan') return this.enterReplan(plan, '')
+        if (choice === 'terminate') return this.finish('aborted', plan)
+        return this.run(plan, i)
+      }
+      const choice = await this.pause(reason, i, plan, '编排恢复：请决定如何继续')
+      if (choice === 'terminate') return this.finish('aborted', plan)
+      if (choice === 'replan') return this.enterReplan(plan, choice)
+      if (choice === 'skip') {
+        this.skipped.add(i)
+        return this.run(plan, i + 1)
+      }
+      if (choice === 'next') {
+        this.mark(i, 'completed', plan)
+        return this.run(plan, i + 1)
+      }
+      if (choice === 'retry') return this.run(plan, i)
+      return // dismissed：保持暂停
+    }
+    if (folded.phase === 'executing') {
+      const plan = foldPaePlan(this.session.events)
+      if (plan === undefined) return
+      const i = Math.max(1, folded.stepIndex ?? 1)
+      const answer = await this.askOrDismiss([{
+        id: 'pae-resume',
+        header: 'Plan-and-Execute 恢复',
+        question: `编排在上次执行到第 ${i}/${plan.steps.length} 步时中断。从断点继续？`,
+        options: [
+          { label: '从断点继续', description: '重新注入当前步骤指令（以步为原子单位续跑）' },
+          { label: PAUSE_REPLAN, description: '回到规划阶段修改计划' },
+          { label: PAUSE_TERMINATE, description: '终止编排' },
+        ],
+      }])
+      if (answer === 'dismissed') return
+      const label = answer.answers.find(entry => entry.id === 'pae-resume')?.selected[0]
+      if (label === '从断点继续') return this.run(plan, i)
+      if (label === PAUSE_REPLAN) return this.enterReplan(plan, '')
+      if (label === PAUSE_TERMINATE) return this.finish('aborted', plan)
+      return
+    }
+    if (folded.phase === 'planning') {
+      const answer = await this.askOrDismiss([{
+        id: 'pae-resume',
+        header: 'Plan-and-Execute 恢复',
+        question: '编排在规划阶段中断，继续规划？',
+        options: [
+          { label: '继续规划', description: '提示模型继续完成步骤文件并提交审批' },
+          { label: PAUSE_TERMINATE, description: '终止编排' },
+        ],
+      }])
+      if (answer === 'dismissed') return
+      const label = answer.answers.find(entry => entry.id === 'pae-resume')?.selected[0]
+      if (label === '继续规划') {
+        this.deps.agent.steer(resumePlanningInstruction())
+        this.armApproval()
+      } else if (label === PAUSE_TERMINATE) {
+        this.append('pae/state', { phase: 'aborted', task: folded.task, planDir: this.deps.planDir })
+      }
+    }
   }
 
   private finish(phase: 'completed' | 'aborted', plan: PaePlanPayload): void {
