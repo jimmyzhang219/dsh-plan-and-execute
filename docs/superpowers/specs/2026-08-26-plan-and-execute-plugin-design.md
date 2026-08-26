@@ -53,8 +53,11 @@ idle ──/plan-and-execute 任务──▶ planning ──批准──▶ exec
                      回到计划(重规划)─┘  │ 回模型修改)      │ │
                                    └── loop ◀──┐       ▼ │
                                                 └── paused ◀┘
-paused 触发源：步骤失败(默认) / requiresConfirmation 步前确认 / 用户取消当前步 / 重启后恢复确认
-paused 选项：重试该步 · 跳过该步 · 继续下一步 · 回到计划阶段 · 终止
+paused 触发源（pausedReason 一并持久化，区分交互形态）：
+  confirm-point（requiresConfirmation 步前确认，四选项：继续 · 跳过 · 回到计划 · 终止）
+  failure（步骤失败，五选项：重试该步 · 跳过该步 · 继续下一步 · 回到计划阶段 · 终止）
+  cancelled（用户取消当前步，五选项同上）
+跳过的步骤 todo 项保持 pending，终局汇总标注 skipped；auto-recover 自愈计数按步计，replan 后重置。
 ```
 
 - **planning 内循环**（"与用户反复交互直到确认"）：模型写步骤文件 → 调 `submit_plan(manifest)` → 审批弹窗 → 未过则反馈作为工具错误回给模型 → 修改后再提交 → 循环，直到 Approve 或用户放弃。
@@ -73,13 +76,14 @@ paused 选项：重试该步 · 跳过该步 · 继续下一步 · 回到计划�
 `/plan-and-execute <任务描述>`，handler（收 `CommandInvocation{agent, rawInput, signal}`）前置校验，任一不满足即返回 `{kind:'error', text}` 且不启动：
 
 1. `ctx.get('userQuestions')` 存在（headless 无审批通道则拒绝启动）；
-2. `agent.status === 'idle'`（忙则提示稍后再试）；
-3. 折叠态检查：`planning`/`executing` 中 → 报错"编排进行中"；`paused` → 重新弹出暂停交互（额外恢复入口）后返回；
-4. plan-mode 未激活（`foldPlanMode` 为真 → 报错并提示先 `/plan off`；两者 prompt 相互干扰，互斥最干净）。
+2. `rawInput` 非空（空任务 → 报错"请提供任务描述"）；
+3. `agent.status === 'idle'`（忙则提示稍后再试）；
+4. 折叠态检查：`planning`/`executing` 中 → 报错"编排进行中"；`paused` → 通知编排器重新弹出对应交互（按 `pausedReason` 选确认点或暂停弹窗），命令**不等待交互结果**，返回 success；
+5. plan-mode 未激活（`foldPlanMode` 为真 → 报错并提示先 `/plan off`；两者 prompt 相互干扰，互斥最干净）。
 
 通过后：append `pae/state{phase:'planning', task, planDir}` → `agent.steer(规划启动指令)` → 返回 success（编排器在后台 fiber 运行）。
 
-**planDir**：`<config.planDir 默认 '.pae'>/<sessionId>/<runToken>`，runToken 为启动时间戳（如 `20260826-1530`），同一会话多次编排互不冲突。
+**planDir**：`<config.planDir 默认 '.pae'>/<sessionId>/<runToken>`，runToken 为启动时间戳（精确到秒，如 `20260826-153012`），同一会话多次编排互不冲突。
 
 ### 5.2 `pae:planning` prompt section
 
@@ -118,16 +122,16 @@ summary?: string
 
 对 manifest 自 `stepIndex` 起的每一步 `i`（1-based 共 N 步）：
 
-1. 若 `steps[i].requiresConfirmation` → 弹确认点："即将执行第 i/N 步 `<title>`"，选项 继续 / 跳过 / 回到计划 / 终止；
-2. manifest 文件存在性校验（悬空 → 暂停，结构性问题不自动处理）；
-3. append `pae/state{executing, stepIndex:i}`；`todo/write`：第 i-1 步 completed、第 i 步 in_progress；
+1. manifest 文件存在性校验（悬空 → paused(`failure`)，结构性问题不自动处理）；
+2. 若 `steps[i].requiresConfirmation` → append `pae/state{paused, pausedReason:'confirm-point'}`，弹确认点："即将执行第 i/N 步 `<title>`"，选项 继续 / 跳过 / 回到计划 / 终止；
+3. append `pae/state{executing, stepIndex:i}`；`todo/write`：i>1 时前一步 completed、第 i 步 in_progress；
 4. `steer` 步骤指令："执行计划第 i/N 步 `<title>`，完整内容见 `<planDir>/<file>`，先读取该文件；完成或受阻都必须调用 `report_step` 汇报"；
 5. `await agent.whenIdle()`，折叠判定（自注入点之后的 turn/end 原因 × log 中 `pae/step-report` 事件）：
 
 | 情形 | 动作 |
 |---|---|
-| turn aborted | 用户取消 → paused |
-| turn error / max-tokens | 步骤失败 → 失败策略（§6.3） |
+| turn aborted | 用户取消 → paused(`cancelled`) |
+| turn error / max-tokens | 步骤失败 → 失败策略（§6.3），pausedReason 记 `failure` |
 | `report_step(done)` | 成功 → 下一步 |
 | `report_step(blocked)` | 步骤失败 → 失败策略 |
 | turn completed 但无 report_step | `steer` 追问一次"请调用 report_step 汇报该步结果"；仍无 → 按失败处理 |
@@ -167,7 +171,7 @@ summary?: string
 插件监听 `agent/created`（含 resume 重建），折叠 `pae/state`：
 
 - `planning` / `executing`（进行中但无 driver）→ 弹恢复确认："执行到第 i/N 步 — 从断点继续 / 回到计划 / 终止"。**续跑以"步"为原子单位**：重新注入当前步指令，步内已做部分由模型从会话上下文自行衔接。
-- `paused` → 重弹暂停交互。
+- `paused` → 按 `pausedReason` 重弹对应交互（`confirm-point` → 确认点四选项；`failure`/`cancelled` → 暂停五选项）。
 - `completed` / `aborted` / 无状态 → 不动作。
 
 插件卸载/重载：编排器 fiber 随插件 scope 终止；状态已在 log，重载后经 `agent/created` 走恢复路径。
