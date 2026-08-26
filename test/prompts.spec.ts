@@ -20,10 +20,17 @@ describe('section 正文', () => {
     expect(text).toContain('step-NN')
     expect(text).toContain('requiresConfirmation')
   })
-  it('executing 正文含 report_step 与 todo 纪律', () => {
+  it('planning 正文明确禁用 exit_plan_mode（dsh plan-mode 工具）', () => {
+    const text = PLANNING_SECTION_BODY('/ws/.pae/s/20260826')
+    expect(text).toContain('exit_plan_mode')
+    expect(text).toContain('不要调用')
+  })
+  it('executing 正文含 report_step 与 todo 纪律，并禁用 submit_plan/exit_plan_mode', () => {
     const text = EXECUTING_SECTION_BODY()
     expect(text).toContain('report_step')
     expect(text).toContain('todo_write')
+    expect(text).toContain('submit_plan')
+    expect(text).toContain('exit_plan_mode')
   })
 })
 

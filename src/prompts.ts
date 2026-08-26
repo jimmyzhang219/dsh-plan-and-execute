@@ -29,6 +29,8 @@ export function PLANNING_SECTION_BODY(planDir: string): string {
     '- 本阶段不做变更性操作：写文件仅限上述计划目录。',
     '- 全部步骤文件写完后，调用 submit_plan 提交步骤清单（file 相对计划目录）。',
     '  用户会审批；被驳回时按反馈修改文件后重新提交。',
+    '- 不要调用 exit_plan_mode——它属于 dsh 的 plan-mode 功能，本编排不使用；',
+    '  计划审批只通过 submit_plan 完成。',
   ].join('\n')
 }
 
@@ -41,6 +43,7 @@ export function EXECUTING_SECTION_BODY(): string {
     '- 本步结束前必须调用 report_step 汇报：完成用 outcome=done，受阻用 outcome=blocked，如实汇报，不谎报。',
     '- 发现计划有误时：完成当前步能完成的部分并在 summary 说明，或 report_step(blocked) 说明原因；不要自行跳步或改做其他步骤。',
     '- todo 清单由插件维护：不要调用 todo_write（整表替换会覆盖插件写入的进度）。',
+    '- 不要调用 submit_plan（仅规划阶段可用）或 exit_plan_mode（dsh plan-mode 的工具）——本阶段的汇报工具只有 report_step。',
   ].join('\n')
 }
 
