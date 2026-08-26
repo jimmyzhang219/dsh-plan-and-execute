@@ -1,5 +1,10 @@
 /**
- * plan-and-execute 的持久化事件词汇与折叠函数。纯函数，无运行时依赖。
+ * plan-and-execute 的编排状态词汇与工具函数。
+ *
+ * 注意：dsh 的会话事件白名单（KNOWN_SESSION_EVENT_TYPES）不接受外部插件的
+ * 自定义事件类型，因此编排控制流状态不写入会话日志，而是持久化在
+ * planDir/orchestrator.json（见 persist.ts）；会话日志只记录标准事件
+ * （todo/write、turn/* 等）。
  * @module plan-and-execute/state
  */
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
@@ -22,66 +27,10 @@ export interface PaePlanPayload {
   readonly steps: readonly PlanStep[]
 }
 
-export interface PaeStatePayload {
-  readonly phase: PaePhase
-  readonly task?: string
-  readonly planDir?: string
-  /** 1-based，当前正在执行/暂停的步骤；批准后未开始时为 0。 */
-  readonly stepIndex?: number
-  readonly pausedReason?: PaePausedReason
-}
-
 export interface PaeStepReportPayload {
   readonly stepIndex: number
   readonly outcome: 'done' | 'blocked'
   readonly summary: string
-}
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /** 整值替换，last-wins；见规格 §7.1。 */
-    'pae/state': PaeStatePayload
-    /** 每次审批通过追加一条；折叠取最后。 */
-    'pae/plan': PaePlanPayload
-    'pae/step-report': PaeStepReportPayload
-  }
-}
-
-export interface PaeFoldedState {
-  readonly phase: PaePhase | 'none'
-  readonly task?: string
-  readonly planDir?: string
-  readonly stepIndex?: number
-  readonly pausedReason?: PaePausedReason
-}
-
-export function foldPae(events: readonly SessionEvent[], end = events.length): PaeFoldedState {
-  let state: PaeFoldedState = { phase: 'none' }
-  let index = 0
-  for (const event of events) {
-    if (index >= end) break
-    index++
-    if (event.type === 'pae/state') state = event.data
-  }
-  return state
-}
-
-export function foldPaePlan(events: readonly SessionEvent[]): PaePlanPayload | undefined {
-  let plan: PaePlanPayload | undefined
-  for (const event of events) {
-    if (event.type === 'pae/plan') plan = event.data
-  }
-  return plan
-}
-
-export function foldStepReports(
-  events: readonly SessionEvent[],
-): Map<number, PaeStepReportPayload> {
-  const reports = new Map<number, PaeStepReportPayload>()
-  for (const event of events) {
-    if (event.type === 'pae/step-report') reports.set(event.data.stepIndex, event.data)
-  }
-  return reports
 }
 
 /** 构造 `todo/write` 整表快照；statuses 缺省为 pending（1-based）。 */

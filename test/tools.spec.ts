@@ -60,7 +60,7 @@ describe('reportStepForCurrent', () => {
       [{ file: 'a.md', title: 'A' }],
       [answer('pae-approve', '批准')],
     )
-    expect(() => orchestrator.reportStepForCurrent('done', '太早')).toThrow(
+    await expect(orchestrator.reportStepForCurrent('done', '太早')).rejects.toThrow(
       'report_step 仅在执行阶段的当前步骤内可用',
     )
   })

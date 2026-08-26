@@ -1,41 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { classifyStepOutcome, decideAction } from '../src/decision.ts'
+import { classifyOutcome, decideAction } from '../src/decision.ts'
 
-let seq = 0
-const ev = (type: string, data: object): SessionEvent =>
-  ({ seq: ++seq, type, data }) as SessionEvent
-
-describe('classifyStepOutcome', () => {
+describe('classifyOutcome', () => {
   it('turn aborted → aborted（优先于 report）', () => {
-    const recent = [
-      ev('pae/step-report', { stepIndex: 1, outcome: 'done', summary: 'x' }),
-      ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } }),
-    ]
-    expect(classifyStepOutcome(recent, 1)).toBe('aborted')
+    expect(classifyOutcome('aborted', { stepIndex: 1, outcome: 'done', summary: 'x' })).toBe(
+      'aborted',
+    )
   })
   it('turn error / max-tokens / interrupted → failed', () => {
-    for (const kind of ['error', 'max-tokens', 'interrupted'] as const) {
-      const recent = [ev('turn/end', { turn: 1, reason: { kind } })]
-      expect(classifyStepOutcome(recent, 1)).toBe('failed')
+    for (const kind of ['error', 'max-tokens', 'interrupted']) {
+      expect(classifyOutcome(kind, undefined)).toBe('failed')
     }
   })
-  it('completed + 本步 report → done/blocked；他步 report 不算', () => {
-    const ok = [
-      ev('pae/step-report', { stepIndex: 1, outcome: 'done', summary: 's' }),
-      ev('turn/end', { turn: 1, reason: { kind: 'completed' } }),
-    ]
-    expect(classifyStepOutcome(ok, 1)).toBe('done')
-    const blocked = [
-      ev('pae/step-report', { stepIndex: 1, outcome: 'blocked', summary: 's' }),
-      ev('turn/end', { turn: 1, reason: { kind: 'completed' } }),
-    ]
-    expect(classifyStepOutcome(blocked, 1)).toBe('blocked')
-    const other = [
-      ev('pae/step-report', { stepIndex: 2, outcome: 'done', summary: 's' }),
-      ev('turn/end', { turn: 1, reason: { kind: 'completed' } }),
-    ]
-    expect(classifyStepOutcome(other, 1)).toBe('missing-report')
+  it('completed + 本步 report → done/blocked；无 report → missing-report', () => {
+    expect(classifyOutcome('completed', { stepIndex: 1, outcome: 'done', summary: 's' })).toBe(
+      'done',
+    )
+    expect(classifyOutcome('completed', { stepIndex: 1, outcome: 'blocked', summary: 's' })).toBe(
+      'blocked',
+    )
+    expect(classifyOutcome('completed', undefined)).toBe('missing-report')
+  })
+  it('无 turn/end 但无 report → missing-report', () => {
+    expect(classifyOutcome(undefined, undefined)).toBe('missing-report')
   })
 })
 

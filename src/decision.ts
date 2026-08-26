@@ -2,29 +2,24 @@
  * 步骤结局分类与失败策略决策。纯函数。
  * @module plan-and-execute/decision
  */
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PaePausedReason, PaeStepReportPayload } from './state.ts'
 
 export type StepOutcome = 'done' | 'blocked' | 'failed' | 'aborted' | 'missing-report'
 
 /**
- * 对"自注入步骤指令后新追加的事件"分类本步结局。优先级：turn 结束原因 >
- * 本步 report（error/aborted 后到达的 report 不翻案）> 缺报。
+ * 分类本步结局。turn/end 原因自会话日志（标准事件），report 自编排内存态
+ * （pae/step-report 不写日志，freshReport 由编排器按注入水位线判定）。
+ * 优先级：turn 结束原因 > 本步 report > 缺报。
  */
-export function classifyStepOutcome(
-  recent: readonly SessionEvent[],
-  stepIndex: number,
+export function classifyOutcome(
+  turnEndKind: string | undefined,
+  freshReport: PaeStepReportPayload | undefined,
 ): StepOutcome {
-  let report: PaeStepReportPayload | undefined
-  let turnEnd: { reason: { kind: string } } | undefined
-  for (const event of recent) {
-    if (event.type === 'pae/step-report' && event.data.stepIndex === stepIndex) report = event.data
-    if (event.type === 'turn/end') turnEnd = event.data as { reason: { kind: string } }
+  if (turnEndKind === 'aborted') return 'aborted'
+  if (turnEndKind === 'error' || turnEndKind === 'max-tokens' || turnEndKind === 'interrupted') {
+    return 'failed'
   }
-  const kind = turnEnd?.reason.kind
-  if (kind === 'aborted') return 'aborted'
-  if (kind === 'error' || kind === 'max-tokens' || kind === 'interrupted') return 'failed'
-  if (report !== undefined) return report.outcome === 'done' ? 'done' : 'blocked'
+  if (freshReport !== undefined) return freshReport.outcome === 'done' ? 'done' : 'blocked'
   return 'missing-report'
 }
 

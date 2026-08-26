@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { PersistedOrchestratorState } from '../src/persist.ts'
 import type { PaePhase } from '../src/state.ts'
 
 /** 最小假 ctx：捕获注册项。inject 同步执行 setup 并回传 ctx 本体。 */
@@ -46,35 +50,51 @@ function fakeCtx() {
   return ctx
 }
 
-const fakeAgent = (phase: 'none' | PaePhase) => {
-  const events: SessionEvent[] =
-    phase === 'none'
-      ? []
-      : [
-          {
-            seq: 1,
-            time: 1,
-            type: 'pae/state',
-            data: { phase, task: 'T', planDir: '/ws/.pae/sess-1/x' },
-          },
-        ]
-  return {
+let cwd: string
+beforeEach(async () => {
+  cwd = await mkdtemp(join(tmpdir(), 'pae-index-'))
+})
+afterAll(async () => {
+  if (cwd !== undefined) await rm(cwd, { recursive: true, force: true })
+})
+
+const fakeAgent = (_phase: 'none' | PaePhase) => ({
+  id: 'sess-1',
+  status: 'idle',
+  steer: vi.fn(),
+  whenIdle: async () => {},
+  ctx: {
+    tools: {
+      restrict: vi.fn((_filter: unknown) => () => {}),
+    },
+  },
+  session: {
     id: 'sess-1',
-    status: 'idle',
-    steer: vi.fn(),
-    whenIdle: async () => {},
-    ctx: {
-      tools: {
-        restrict: vi.fn((_filter: unknown) => () => {}),
-      },
-    },
-    session: {
-      id: 'sess-1',
-      header: { cwd: '/ws' },
-      events,
-      append: vi.fn((_type: string, _data: object) => {}),
-    },
-  }
+    header: { cwd },
+    events: [] as SessionEvent[],
+    append: vi.fn((_type: string, _data: object) => {}),
+  },
+})
+
+/** 写入 orchestrator.json 模拟既有编排状态（命令校验读文件）。 */
+async function seedState(
+  phase: PaePhase,
+  extra: Partial<PersistedOrchestratorState> = {},
+): Promise<void> {
+  const dir = join(cwd, '.pae', 'sess-1')
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'orchestrator.json'),
+    JSON.stringify({
+      phase,
+      planDir: dir,
+      stepReports: [],
+      statuses: {},
+      skipped: [],
+      ...extra,
+    } satisfies PersistedOrchestratorState),
+    'utf8',
+  )
 }
 
 describe('apply 装配', () => {
@@ -97,24 +117,31 @@ describe('apply 装配', () => {
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
     const handler = ctx.registered.commands[0]!.handler as (
       invocation: Record<string, unknown>,
-    ) => unknown
+    ) => Promise<unknown>
 
-    expect(handler({ agent: fakeAgent('none'), rawInput: '   ' })).toMatchObject({ kind: 'error' })
+    await expect(handler({ agent: fakeAgent('none'), rawInput: '   ' })).resolves.toMatchObject({
+      kind: 'error',
+    })
     ctx.get.mockReturnValueOnce(undefined)
-    expect(handler({ agent: fakeAgent('none'), rawInput: '做点事' })).toMatchObject({
+    await expect(handler({ agent: fakeAgent('none'), rawInput: '做点事' })).resolves.toMatchObject({
       kind: 'error',
     })
 
     const busy = { ...fakeAgent('none'), status: 'running' }
-    expect(handler({ agent: busy, rawInput: '做点事' })).toMatchObject({ kind: 'error' })
+    await expect(handler({ agent: busy, rawInput: '做点事' })).resolves.toMatchObject({
+      kind: 'error',
+    })
 
     const planMode = fakeAgent('none')
     planMode.session.events = [
       { seq: 1, type: 'plan/mode', data: { active: true } } as SessionEvent,
     ]
-    expect(handler({ agent: planMode, rawInput: '做点事' })).toMatchObject({ kind: 'error' })
+    await expect(handler({ agent: planMode, rawInput: '做点事' })).resolves.toMatchObject({
+      kind: 'error',
+    })
 
-    expect(handler({ agent: fakeAgent('planning'), rawInput: '做点事' })).toMatchObject({
+    await seedState('planning')
+    await expect(handler({ agent: fakeAgent('none'), rawInput: '做点事' })).resolves.toMatchObject({
       kind: 'error',
     })
   })
@@ -125,12 +152,11 @@ describe('apply 装配', () => {
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
     const handler = ctx.registered.commands[0]!.handler as (
       invocation: Record<string, unknown>,
-    ) => unknown
+    ) => Promise<unknown>
     const agent = fakeAgent('none')
-    const result = handler({ agent, rawInput: '重构登录模块' })
+    const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
     expect(agent.steer).toHaveBeenCalledTimes(1)
-    expect(agent.session.append).toHaveBeenCalled()
   })
 
   it('启动编排 → 对该 agent deny exit_plan_mode（agent-scoped restrict）', async () => {
@@ -139,23 +165,23 @@ describe('apply 装配', () => {
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
     const handler = ctx.registered.commands[0]!.handler as (
       invocation: Record<string, unknown>,
-    ) => unknown
+    ) => Promise<unknown>
     const agent = fakeAgent('none')
-    handler({ agent, rawInput: '重构登录模块' })
+    await handler({ agent, rawInput: '重构登录模块' })
     expect(agent.ctx.tools.restrict).toHaveBeenCalledWith({ deny: ['exit_plan_mode'] })
   })
 
-  it('重复启动（编排未结束时）→ restrict 幂等只调一次', async () => {
+  it('已有编排进行中 → 不重复 restrict（幂等）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
     const handler = ctx.registered.commands[0]!.handler as (
       invocation: Record<string, unknown>,
-    ) => unknown
+    ) => Promise<unknown>
+    await seedState('planning')
     const agent = fakeAgent('none')
-    handler({ agent, rawInput: '重构登录模块' })
-    handler({ agent, rawInput: '再来一个' })
-    expect(agent.ctx.tools.restrict).toHaveBeenCalledTimes(1)
+    await handler({ agent, rawInput: '重构登录模块' })
+    expect(agent.ctx.tools.restrict).not.toHaveBeenCalled()
   })
 
   it('部署无 plan-mode（restrict 抛错）→ 容错，编排正常启动', async () => {
@@ -164,13 +190,26 @@ describe('apply 装配', () => {
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
     const handler = ctx.registered.commands[0]!.handler as (
       invocation: Record<string, unknown>,
-    ) => unknown
+    ) => Promise<unknown>
     const agent = fakeAgent('none')
     agent.ctx.tools.restrict.mockImplementationOnce(() => {
       throw new Error('tools.restrict() names unknown global tool "exit_plan_mode"')
     })
-    const result = handler({ agent, rawInput: '重构登录模块' })
+    const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
     expect(agent.steer).toHaveBeenCalledTimes(1)
+  })
+
+  it('paused 态命令重入 → 重新弹出暂停选项', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    await seedState('paused', { pausedReason: 'failure', stepIndex: 2 })
+    const agent = fakeAgent('none')
+    const result = await handler({ agent, rawInput: '继续' })
+    expect(result).toMatchObject({ kind: 'success', text: expect.stringContaining('暂停') })
   })
 })

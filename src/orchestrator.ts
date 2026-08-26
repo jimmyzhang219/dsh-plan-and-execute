@@ -1,18 +1,24 @@
 /**
  * plan-and-execute 编排器：状态机 + 步进驱动循环。
- * 只依赖窄结构接口（DriveAgent/DriveSession/AskFn），全部可离线单测；
- * 真实 Agent → DriveAgent 的适配在 src/index.ts。
+ * 只依赖窄结构接口（DriveAgent/DriveSession/AskFn/PersistedStorage），
+ * 全部可离线单测；真实 Agent 的适配在 src/index.ts。
+ *
+ * 控制流状态不写会话日志（dsh 白名单拒绝外部事件类型），改由
+ * PersistedStorage 存 planDir/orchestrator.json；会话日志只记录标准事件
+ * （turn/*、todo/write）。
  * @module plan-and-execute/orchestrator
  */
 import type { SessionEvent, TodoItem, UserMessage } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-import {
-  classifyStepOutcome,
-  decideAction,
-  type FailurePolicy,
-  type StepOutcome,
-} from './decision.ts'
+import { classifyOutcome, decideAction, type FailurePolicy, type StepOutcome } from './decision.ts'
 import { validateManifest } from './manifest.ts'
+import {
+  resetPlanDir,
+  restoreState,
+  snapshotState,
+  type PersistedOrchestratorState,
+  type PersistedStorage,
+} from './persist.ts'
 import {
   completionDetail,
   kickoffInstruction,
@@ -25,19 +31,18 @@ import {
 } from './prompts.ts'
 import {
   buildTodoPayload,
-  foldPae,
-  foldPaePlan,
-  foldStepReports,
   type PaePausedReason,
+  type PaePhase,
   type PaePlanPayload,
+  type PaeStepReportPayload,
   type PlanStep,
 } from './state.ts'
 
-export type PaeEventType = 'pae/state' | 'pae/plan' | 'pae/step-report' | 'todo/write'
-
 export interface DriveSession {
+  /** 标准事件日志（仅宿主白名单事件；pae/* 不在此）。 */
   readonly events: readonly SessionEvent[]
-  append(eventType: PaeEventType, data: object): void
+  /** 写 `todo/write` 整表快照（宿主内置事件）。 */
+  writeTodos(todos: readonly TodoItem[]): void
 }
 
 export interface DriveAgent {
@@ -73,12 +78,33 @@ export const DONE_ACK = '知道了'
 
 type PauseChoice = 'retry' | 'skip' | 'next' | 'replan' | 'terminate' | 'dismissed'
 
+interface RuntimeState {
+  phase: PaePhase | 'none'
+  task?: string
+  planDir?: string
+  stepIndex?: number
+  pausedReason?: PaePausedReason
+  plan?: PaePlanPayload
+  stepReports: Map<number, PaeStepReportPayload>
+  statuses: Map<number, TodoItem['status']>
+  skipped: Set<number>
+}
+
 export class Orchestrator {
   private disposed = false
   private approval: PromiseWithResolvers<PaePlanPayload> | undefined
-  private statuses = new Map<number, TodoItem['status']>()
-  private skipped = new Set<number>()
   private lastFeedback = ''
+  /** report 注入水位线：注入指令时记下，settle 时据此判定"本回合新增的 report"。 */
+  private reportSeq = 0
+  private reportWatermark = 0
+  /** 步骤指令注入次数（含 retry 重注入）：单调递增，测试/审计用于区分同一步的多次尝试。 */
+  private stepAttempt = 0
+  private readonly state: RuntimeState = {
+    phase: 'none',
+    stepReports: new Map(),
+    statuses: new Map(),
+    skipped: new Set(),
+  }
 
   constructor(
     private readonly deps: {
@@ -86,6 +112,7 @@ export class Orchestrator {
       ask: AskFn
       config: ResolvedConfig
       planDir: string
+      storage: PersistedStorage
       hooks?: OrchestratorHooks
     },
   ) {}
@@ -94,18 +121,54 @@ export class Orchestrator {
     return this.deps.agent.session
   }
 
-  private append(eventType: PaeEventType, data: object): void {
-    this.session.append(eventType, data)
+  private folded(): {
+    phase: PaePhase | 'none'
+    task?: string
+    planDir?: string
+    stepIndex?: number
+    pausedReason?: PaePausedReason
+  } {
+    const { phase, task, planDir, stepIndex, pausedReason } = this.state
+    return { phase, task, planDir, stepIndex, pausedReason }
   }
 
-  private folded() {
-    return foldPae(this.session.events)
+  /** 状态快照持久化（所有状态变更后调用；fail-loud：写盘失败向上抛）。 */
+  private async save(): Promise<void> {
+    await this.deps.storage.save(snapshotState(this.state))
   }
 
-  /** 命令入口：进入规划阶段并注入 kickoff。 */
-  begin(task: string): void {
+  /** 当前内存态快照（只读；prompt section 等同步读取用）。 */
+  snapshot(): {
+    phase: PaePhase | 'none'
+    planDir?: string
+    stepIndex?: number
+    stepAttempt: number
+  } {
+    return {
+      phase: this.state.phase,
+      planDir: this.state.planDir,
+      stepIndex: this.state.stepIndex,
+      stepAttempt: this.stepAttempt,
+    }
+  }
+
+  /** 命令入口：清空旧编排目录、进入规划阶段并注入 kickoff。 */
+  async begin(task: string): Promise<void> {
+    await resetPlanDir(this.deps.planDir)
     this.deps.hooks?.onActivate?.()
-    this.append('pae/state', { phase: 'planning', task, planDir: this.deps.planDir })
+    this.state.phase = 'planning'
+    this.state.task = task
+    this.state.planDir = this.deps.planDir
+    this.state.stepIndex = undefined
+    this.state.pausedReason = undefined
+    this.state.plan = undefined
+    this.state.stepReports.clear()
+    this.state.statuses.clear()
+    this.state.skipped.clear()
+    this.reportSeq = 0
+    this.reportWatermark = 0
+    this.stepAttempt = 0
+    await this.save()
     this.deps.agent.steer(kickoffInstruction(task, this.deps.planDir))
     this.armApproval()
   }
@@ -123,11 +186,8 @@ export class Orchestrator {
       if (!this.disposed) await this.run(plan, 1)
     } catch (error) {
       if (!this.disposed) {
-        this.append('pae/state', {
-          phase: 'aborted',
-          task: this.folded().task,
-          planDir: this.deps.planDir,
-        })
+        this.state.phase = 'aborted'
+        await this.save().catch(() => {})
       }
       void error
     }
@@ -138,7 +198,7 @@ export class Orchestrator {
     steps: readonly PlanStep[],
     summary?: string,
   ): Promise<{ approved: true } | { approved: false; error: string }> {
-    if (this.folded().phase !== 'planning') {
+    if (this.state.phase !== 'planning') {
       return {
         approved: false,
         error: 'submit_plan 仅在规划阶段可用（当前不在 plan-and-execute 规划中）',
@@ -183,50 +243,59 @@ export class Orchestrator {
       steps,
       ...(summary === undefined ? {} : { summary }),
     }
-    this.statuses.clear()
-    this.skipped.clear()
-    this.append('pae/plan', plan)
-    this.append('pae/state', {
-      phase: 'executing',
-      stepIndex: 0,
-      planDir: plan.planDir,
-      task: this.folded().task,
-    })
-    this.append('todo/write', buildTodoPayload(plan.steps, this.statuses))
+    this.state.plan = plan
+    this.state.phase = 'executing'
+    this.state.stepIndex = 0
+    this.state.stepReports.clear()
+    this.state.statuses.clear()
+    this.state.skipped.clear()
+    await this.save()
+    this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
     this.approval?.resolve(plan)
     return { approved: true }
   }
 
   /** report_step 工具入口（按显式步号；步号由编排器判定，防伪造）。 */
-  reportStep(stepIndex: number, outcome: 'done' | 'blocked', summary: string): void {
+  async reportStep(stepIndex: number, outcome: 'done' | 'blocked', summary: string): Promise<void> {
     const folded = this.folded()
     if (folded.phase !== 'executing' || folded.stepIndex !== stepIndex) {
       throw new Error(
         `report_step 与当前执行步骤不符（当前：第 ${folded.stepIndex ?? '?'} 步，收到：第 ${stepIndex} 步）`,
       )
     }
-    this.append('pae/step-report', { stepIndex, outcome, summary })
+    this.state.stepReports.set(stepIndex, { stepIndex, outcome, summary })
+    this.reportSeq += 1
+    await this.save()
   }
 
   /** report_step 工具入口：步号取折叠状态中的当前步。 */
-  reportStepForCurrent(outcome: 'done' | 'blocked', summary: string): void {
+  async reportStepForCurrent(outcome: 'done' | 'blocked', summary: string): Promise<void> {
     const folded = this.folded()
     if (folded.phase !== 'executing' || folded.stepIndex === undefined || folded.stepIndex === 0) {
       throw new Error('report_step 仅在执行阶段的当前步骤内可用')
     }
-    this.reportStep(folded.stepIndex, outcome, summary)
+    await this.reportStep(folded.stepIndex, outcome, summary)
   }
 
   /** 注入指令后等待本步结局。 */
-  private async settle(mark: number, stepIndex: number): Promise<StepOutcome> {
+  private async settle(stepIndex: number): Promise<StepOutcome> {
+    const eventMark = this.session.events.length
+    const reportWatermark = this.reportWatermark
     await this.deps.agent.whenIdle()
     if (this.disposed) return 'aborted'
-    return classifyStepOutcome(this.session.events.slice(mark), stepIndex)
+    let turnEndKind: string | undefined
+    for (const event of this.session.events.slice(eventMark)) {
+      if (event.type === 'turn/end')
+        turnEndKind = (event.data as { reason: { kind: string } }).reason.kind
+    }
+    const freshReport =
+      this.reportSeq > reportWatermark ? this.state.stepReports.get(stepIndex) : undefined
+    return classifyOutcome(turnEndKind, freshReport)
   }
 
   private mark(stepIndex: number, status: TodoItem['status'], plan: PaePlanPayload): void {
-    this.statuses.set(stepIndex, status)
-    this.append('todo/write', buildTodoPayload(plan.steps, this.statuses))
+    this.state.statuses.set(stepIndex, status)
+    this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
   }
 
   /** 执行主循环：from 为 1-based 起始步。 */
@@ -250,7 +319,7 @@ export class Orchestrator {
         if (choice === 'terminate') return this.finish('aborted', plan)
         if (choice === 'replan') return this.enterReplan(plan, choice)
         if (choice === 'skip' || choice === 'next') {
-          if (choice === 'skip') this.skipped.add(i)
+          if (choice === 'skip') this.state.skipped.add(i)
           i += 1
           nudged = false
           recoveries = 0
@@ -263,7 +332,7 @@ export class Orchestrator {
         const choice = await this.confirmChoice(i, plan)
         if (choice === 'dismissed') return // 保持 paused(confirm-point)，等 revive/命令重入
         if (choice === 'skip') {
-          this.skipped.add(i)
+          this.state.skipped.add(i)
           i += 1
           nudged = false
           recoveries = 0
@@ -273,24 +342,25 @@ export class Orchestrator {
         if (choice === 'terminate') return this.finish('aborted', plan)
         // continue → 落到下方 executing
       }
-      this.append('pae/state', {
-        phase: 'executing',
-        stepIndex: i,
-        planDir: plan.planDir,
-        task: this.folded().task,
-      })
+      this.state.phase = 'executing'
+      this.state.stepIndex = i
+      this.stepAttempt += 1
+      await this.save()
       this.mark(i, 'in_progress', plan)
       this.deps.agent.steer(stepInstruction(i, total, step, plan.planDir))
-      let outcome = await this.settle(this.session.events.length, i)
+      this.reportWatermark = this.reportSeq
+      let outcome = await this.settle(i)
       let action = decideAction(outcome, { nudged, recoveries, policy: this.deps.config })
       while (action.kind !== 'advance') {
         if (this.disposed) return
         if (action.kind === 'nudge') {
           nudged = true
           this.deps.agent.steer(nudgeInstruction())
+          this.reportWatermark = this.reportSeq
         } else if (action.kind === 'recover') {
           recoveries += 1
           this.deps.agent.steer(recoverInstruction(outcome))
+          this.reportWatermark = this.reportSeq
         } else {
           const choice = await this.pause(
             action.reason,
@@ -301,7 +371,7 @@ export class Orchestrator {
           if (choice === 'terminate') return this.finish('aborted', plan)
           if (choice === 'replan') return this.enterReplan(plan, choice)
           if (choice === 'skip') {
-            this.skipped.add(i)
+            this.state.skipped.add(i)
             break
           }
           if (choice === 'next') {
@@ -309,20 +379,24 @@ export class Orchestrator {
             break
           }
           if (choice === 'dismissed') return // 保持 paused：用户搁置弹窗，等命令重入或 revive
-          // retry：重新注入本步指令再等待
+          // retry：恢复 executing（pause 已把状态置为 paused）并重新注入本步指令
+          this.state.phase = 'executing'
+          this.stepAttempt += 1
+          await this.save()
           this.deps.agent.steer(stepInstruction(i, total, step, plan.planDir))
-          outcome = await this.settle(this.session.events.length, i)
+          this.reportWatermark = this.reportSeq
+          outcome = await this.settle(i)
           action = decideAction(outcome, { nudged, recoveries, policy: this.deps.config })
           continue
         }
-        outcome = await this.settle(this.session.events.length, i)
+        outcome = await this.settle(i)
         action = decideAction(outcome, { nudged, recoveries, policy: this.deps.config })
       }
       i += 1
       nudged = false
       recoveries = 0
     }
-    this.finish('completed', plan)
+    await this.finish('completed', plan)
   }
 
   /** 暂停交互（五选项）。弹窗被关视为保持暂停、等待用户消息。 */
@@ -332,13 +406,10 @@ export class Orchestrator {
     plan: PaePlanPayload,
     diagnostic: string,
   ): Promise<PauseChoice> {
-    this.append('pae/state', {
-      phase: 'paused',
-      pausedReason: reason,
-      stepIndex,
-      planDir: plan.planDir,
-      task: this.folded().task,
-    })
+    this.state.phase = 'paused'
+    this.state.pausedReason = reason
+    this.state.stepIndex = stepIndex
+    await this.save()
     const answer = await this.askOrDismiss([
       {
         id: 'pae-pause',
@@ -366,8 +437,9 @@ export class Orchestrator {
   }
 
   private async enterReplan(plan: PaePlanPayload, _feedback: string): Promise<void> {
-    const task = this.folded().task
-    this.append('pae/state', { phase: 'planning', task, planDir: plan.planDir })
+    this.state.phase = 'planning'
+    this.state.plan = undefined
+    await this.save()
     this.deps.agent.steer(replanInstruction(this.lastFeedback, plan.steps.length))
     this.armApproval()
   }
@@ -378,13 +450,10 @@ export class Orchestrator {
     plan: PaePlanPayload,
   ): Promise<'continue' | 'skip' | 'replan' | 'terminate' | 'dismissed'> {
     const step = plan.steps[i - 1]
-    this.append('pae/state', {
-      phase: 'paused',
-      pausedReason: 'confirm-point',
-      stepIndex: i,
-      planDir: plan.planDir,
-      task: this.folded().task,
-    })
+    this.state.phase = 'paused'
+    this.state.pausedReason = 'confirm-point'
+    this.state.stepIndex = i
+    await this.save()
     const answer = await this.askOrDismiss([
       {
         id: 'pae-confirm',
@@ -408,23 +477,26 @@ export class Orchestrator {
   }
 
   /**
-   * 恢复入口（agent/created 重建、或 paused 态命令重入）。按折叠状态弹
-   * 对应交互并续跑；driver 由本方法自身充当。
+   * 恢复入口（agent/created 重建、或 paused 态命令重入）。先加载持久化
+   * 状态，再按折叠状态弹对应交互并续跑；driver 由本方法自身充当。
    */
   async revive(): Promise<void> {
-    const folded = this.folded()
     if (this.disposed) return
+    const persisted = await this.deps.storage.load()
+    if (persisted === undefined) return
+    this.applyPersisted(persisted)
     this.deps.hooks?.onActivate?.()
+    const folded = this.folded()
     if (folded.phase === 'paused') {
       const reason = folded.pausedReason ?? 'failure'
-      const plan = foldPaePlan(this.session.events)
+      const plan = this.state.plan
       const i = folded.stepIndex ?? 1
       if (plan === undefined) return
       if (reason === 'confirm-point') {
         const choice = await this.confirmChoice(i, plan)
         if (choice === 'dismissed') return
         if (choice === 'skip') {
-          this.skipped.add(i)
+          this.state.skipped.add(i)
           return this.run(plan, i + 1)
         }
         if (choice === 'replan') return this.enterReplan(plan, '')
@@ -435,7 +507,7 @@ export class Orchestrator {
       if (choice === 'terminate') return this.finish('aborted', plan)
       if (choice === 'replan') return this.enterReplan(plan, choice)
       if (choice === 'skip') {
-        this.skipped.add(i)
+        this.state.skipped.add(i)
         return this.run(plan, i + 1)
       }
       if (choice === 'next') {
@@ -446,7 +518,7 @@ export class Orchestrator {
       return // dismissed：保持暂停
     }
     if (folded.phase === 'executing') {
-      const plan = foldPaePlan(this.session.events)
+      const plan = this.state.plan
       if (plan === undefined) return
       const i = Math.max(1, folded.stepIndex ?? 1)
       const answer = await this.askOrDismiss([
@@ -486,31 +558,46 @@ export class Orchestrator {
         this.deps.agent.steer(resumePlanningInstruction())
         this.armApproval()
       } else if (label === PAUSE_TERMINATE) {
-        this.append('pae/state', {
-          phase: 'aborted',
-          task: folded.task,
-          planDir: this.deps.planDir,
-        })
+        this.state.phase = 'aborted'
+        await this.save().catch(() => {})
       }
     }
   }
 
-  private finish(phase: 'completed' | 'aborted', plan: PaePlanPayload): void {
+  /** 加载持久化快照到内存（resume 路径）。 */
+  private applyPersisted(persisted: PersistedOrchestratorState): void {
+    this.state.phase = persisted.phase
+    this.state.task = persisted.task
+    this.state.planDir = persisted.planDir
+    this.state.stepIndex = persisted.stepIndex
+    this.state.pausedReason = persisted.pausedReason
+    this.state.plan = persisted.plan
+    const restored = restoreState(persisted)
+    this.state.stepReports = restored.stepReports
+    this.state.statuses = restored.statuses
+    this.state.skipped = restored.skipped
+    this.reportSeq = restored.stepReports.size
+    this.reportWatermark = this.reportSeq
+  }
+
+  private async finish(phase: 'completed' | 'aborted', plan: PaePlanPayload): Promise<void> {
     this.deps.hooks?.onRestore?.()
-    const task = this.folded().task
-    this.append('pae/state', { phase, task, planDir: plan.planDir })
+    this.state.phase = phase
     if (phase === 'completed') {
       // 非跳过步一律 completed（含仍 in_progress 的最终步）；跳过步保持 pending
       for (let k = 1; k <= plan.steps.length; k++) {
-        if (!this.skipped.has(k)) this.statuses.set(k, 'completed')
+        if (!this.state.skipped.has(k)) this.state.statuses.set(k, 'completed')
       }
-      this.append('todo/write', buildTodoPayload(plan.steps, this.statuses))
+    }
+    await this.save()
+    if (phase === 'completed') {
+      this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
       void this.askOrDismiss([
         {
           id: 'pae-done',
           header: 'Plan-and-Execute 完成',
           question: '计划已全部执行完成。',
-          detail: completionDetail(plan.steps, foldStepReports(this.session.events), this.skipped),
+          detail: completionDetail(plan.steps, this.state.stepReports, this.state.skipped),
           options: [{ label: DONE_ACK, description: '关闭通知' }],
         },
       ])

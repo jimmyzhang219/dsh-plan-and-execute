@@ -2,9 +2,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, TodoItem, UserMessage } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-import type { DriveAgent, DriveSession, Orchestrator, PaeEventType } from '../src/orchestrator.ts'
+import type { DriveAgent, DriveSession, Orchestrator } from '../src/orchestrator.ts'
+import type { PersistedOrchestratorState, PersistedStorage } from '../src/persist.ts'
 
 export const tempDirs: string[] = []
 
@@ -12,57 +13,70 @@ export async function cleanupTempDirs(): Promise<void> {
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
 }
 
-/** 假 Session：内存事件数组。 */
+/** 假 Session：标准事件日志（turn/*）+ todo/write 收集；pae/* 事件不再写入。 */
 export class FakeSession implements DriveSession {
   readonly events: SessionEvent[] = []
+  todosWrites: TodoItem[][] = []
   private seq = 0
-  append(eventType: PaeEventType | 'turn/start' | 'turn/end', data: object): void {
+
+  append(eventType: 'turn/start' | 'turn/end', data: object): void {
     this.seq += 1
     this.events.push({ seq: this.seq, type: eventType, data } as SessionEvent)
+  }
+
+  writeTodos(todos: readonly TodoItem[]): void {
+    this.todosWrites.push([...todos])
   }
 }
 
 /**
- * 假 Agent：whenIdle 在队列有脚本时执行一个回合，无脚本时挂起等待
- * scriptTurn 投递——与真实 whenIdle 的"等待 agent 完成"语义对齐。
+ * 假 Agent：whenIdle 挂起等待 scriptTurn，scriptTurn 排队；无论先到哪个，
+ * 事件都先落地再唤醒挂起的 whenIdle——等价于"turn 完成 → agent idle"，
+ * 且 settle 的日志切片总能看到完整 turn 事件。
  */
 export class FakeAgent implements DriveAgent {
   readonly session = new FakeSession()
   steered: UserMessage[] = []
-  private queue: Array<() => void> = []
   private waiter: (() => void) | undefined
+  private pendingTurns: string[] = []
 
   steer(message: UserMessage): void {
     this.steered.push(message)
   }
 
   whenIdle(): Promise<void> {
-    const next = this.queue.shift()
-    if (next !== undefined) {
-      next()
-      return Promise.resolve()
-    }
     return new Promise((resolve) => {
       this.waiter = resolve
+      this.drain()
     })
   }
 
-  /** 预置：下一次 whenIdle 完成一个 turn，可带 report。 */
-  scriptTurn(
-    reason: string,
-    report?: { outcome: 'done' | 'blocked'; summary: string },
-    stepIndex = 1,
-  ): void {
-    this.queue.push(() => {
-      const s = this.session as FakeSession
-      s.append('turn/start', { turn: 1 })
-      if (report) {
-        s.append('pae/step-report', { stepIndex, outcome: report.outcome, summary: report.summary })
-      }
-      s.append('turn/end', { turn: 1, reason: { kind: reason } })
-    })
-    this.waiter?.()
+  /** 完成一个 turn（可先于 whenIdle 调用，排空语义保证事件落地与唤醒有序）。 */
+  scriptTurn(reason: string): void {
+    this.pendingTurns.push(reason)
+    this.drain()
+  }
+
+  private drain(): void {
+    if (this.waiter === undefined || this.pendingTurns.length === 0) return
+    const reason = this.pendingTurns.shift()!
+    const s = this.session as FakeSession
+    s.append('turn/start', { turn: 1 })
+    s.append('turn/end', { turn: 1, reason: { kind: reason } })
+    const resolve = this.waiter
     this.waiter = undefined
+    resolve()
+  }
+}
+
+/** 假持久化：内存快照（真实实现为 planDir/orchestrator.json）。 */
+export class FakeStorage implements PersistedStorage {
+  state: PersistedOrchestratorState | undefined
+  async load(): Promise<PersistedOrchestratorState | undefined> {
+    return this.state
+  }
+  async save(state: PersistedOrchestratorState): Promise<void> {
+    this.state = state
   }
 }
 
@@ -97,12 +111,10 @@ export async function makeOrchestrator(
   askScript: Array<AskUserQuestionAnswer | Error>,
   overrides: { onStepFailure?: 'pause' | 'auto-recover'; maxAutoRecoveries?: number } = {},
   hooks?: ConstructorParameters<typeof Orchestrator>[0]['hooks'],
+  storage = new FakeStorage(),
 ) {
   const planDir = await mkdtemp(join(tmpdir(), 'pae-orch-'))
   tempDirs.push(planDir)
-  for (const step of steps) {
-    await writeFile(join(planDir, step.file), `# ${step.title}\n内容`, 'utf8')
-  }
   const { Orchestrator } = await import('../src/orchestrator.ts')
   const agent = new FakeAgent()
   const { ask, received } = fakeAsk(...askScript)
@@ -115,34 +127,47 @@ export async function makeOrchestrator(
       planRoot: '.pae',
     },
     planDir,
+    storage,
     ...(hooks === undefined ? {} : { hooks }),
   })
-  orchestrator.begin('示例任务')
+  await orchestrator.begin('示例任务') // begin 清空目录（真实语义），之后模型写步骤文件
+  for (const step of steps) {
+    await writeFile(join(planDir, step.file), `# ${step.title}\n内容`, 'utf8')
+  }
   const verdict = await orchestrator.submitPlan(steps, '测试计划')
-  return { orchestrator, agent, ask, received, verdict, steps, planDir }
+  return { orchestrator, agent, ask, received, verdict, steps, planDir, storage }
 }
 
-/** 带"重启后"历史事件（plan + executing）的可控假件：ask 由测试手动 resolve。 */
+/** 带"重启后"持久化状态（executing + plan）的可控假件：ask 由测试手动 resolve。 */
 export class FakeRevivedSession {
   readonly agent = new FakeAgent()
   readonly planDir: string
+  readonly storage = new FakeStorage()
   receivedQuestions: AskUserQuestionItem[][] = []
   private resolver: ((value: AskUserQuestionAnswer) => void) | undefined
 
   constructor() {
     this.planDir = mkdtempSync(join(tmpdir(), 'pae-revive-'))
     tempDirs.push(this.planDir)
-    for (const file of ['a.md', 'b.md'])
+    for (const file of ['a.md', 'b.md']) {
       writeFileSync(join(this.planDir, file), '# step\n内容', 'utf8')
-    const s = this.agent.session as FakeSession
-    s.append('pae/plan', {
+    }
+    this.storage.state = {
+      phase: 'executing',
+      stepIndex: 1,
+      task: 'T',
       planDir: this.planDir,
-      steps: [
-        { file: 'a.md', title: 'A' },
-        { file: 'b.md', title: 'B' },
-      ],
-    })
-    s.append('pae/state', { phase: 'executing', stepIndex: 1, planDir: this.planDir, task: 'T' })
+      plan: {
+        planDir: this.planDir,
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B' },
+        ],
+      },
+      stepReports: [],
+      statuses: {},
+      skipped: [],
+    }
   }
 
   readonly ask = async (questions: AskUserQuestionItem[]): Promise<AskUserQuestionAnswer> => {
