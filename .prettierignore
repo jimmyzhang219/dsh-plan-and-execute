@@ -1,0 +1,10 @@
+lib
+node_modules
+pnpm-lock.yaml
+cordis.patch.yml
+.overlay.dev.yml
+AGENTS.md
+CLAUDE.md
+docs
+.claude
+.superpowers
