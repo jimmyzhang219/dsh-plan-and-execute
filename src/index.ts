@@ -55,6 +55,7 @@ function toDriveAgent(agent: Agent): DriveAgent {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  console.log('[plan-and-execute] plugin loaded')
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
 
