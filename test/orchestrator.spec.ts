@@ -223,15 +223,15 @@ describe('暂停与恢复决策', () => {
     )
     agent.scriptTurn('completed', undefined)
     agent.scriptTurn('completed', undefined) // 追问后仍无 report
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'aborted' })
+    })
     // 事件序列中曾出现 paused(failure)（ask 脚本化无延迟，随即被 aborted 覆盖）
     const paused = agent.session.events.find(
       e => e.type === 'pae/state' && e.data.phase === 'paused',
     )
     expect(paused?.data).toMatchObject({ pausedReason: 'failure' })
-    await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
-      expect(state?.data).toMatchObject({ phase: 'aborted' })
-    })
   })
 
   it('auto-recover：限额内自愈，超限升级暂停', async () => {
@@ -242,16 +242,16 @@ describe('暂停与恢复决策', () => {
     )
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '第一次' }, 1)
     agent.scriptTurn('completed', { outcome: 'blocked', summary: '第二次' }, 1) // 自愈 1 次后仍 blocked → 超限
+    await vi.waitFor(() => {
+      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
+      expect(state?.data).toMatchObject({ phase: 'aborted' })
+    })
     const paused = agent.session.events.find(
       e => e.type === 'pae/state' && e.data.phase === 'paused',
     )
     expect(paused?.data).toMatchObject({ pausedReason: 'failure' })
     const texts = agent.steered.map(m => (m.content[0] as { text: string }).text)
     expect(texts.filter(t => t.includes('自行调整')).length).toBe(1) // 恰好一次自愈指令
-    await vi.waitFor(() => {
-      const state = [...agent.session.events].reverse().find(e => e.type === 'pae/state')
-      expect(state?.data).toMatchObject({ phase: 'aborted' })
-    })
   })
 
   it('跳过 → todo 保持 pending，终局标注 skipped', async () => {
