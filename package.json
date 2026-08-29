@@ -23,7 +23,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/assert-client-wrapper.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
