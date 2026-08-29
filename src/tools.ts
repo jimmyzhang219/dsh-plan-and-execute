@@ -21,6 +21,11 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
       'steps[].file 是相对计划目录的步骤 Markdown 文件名（先写好文件再提交）。' +
       '用户驳回时错误信息携带反馈，按反馈修改后重新提交。',
     parameters: {
+      planDir: {
+        type: 'string',
+        required: true,
+        description: '计划目录（指令中给出的目录，原样传回）',
+      },
       steps: {
         type: 'array',
         required: true,
@@ -65,7 +70,7 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
       if (orchestrator === undefined) {
         throw new Error('当前会话没有进行中的 plan-and-execute 编排')
       }
-      const verdict = await orchestrator.submitPlan(args.steps, args.summary)
+      const verdict = await orchestrator.submitPlan(args.planDir, args.steps, args.summary)
       if (!verdict.approved) throw new Error(verdict.error)
       return { approved: true }
     },
@@ -73,12 +78,15 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
       card: 'generic',
       title: `计划提交（${args.steps.length} 步）`,
       kind: 'other',
-      content: args.steps.map(
-        (step: { title: string; file: string; requiresConfirmation?: boolean }, index: number) => ({
-          type: 'text' as const,
-          text: `${index + 1}. ${step.title} — ${step.file}${step.requiresConfirmation === true ? ' ⚠ 确认点' : ''}`,
-        }),
-      ),
+      content: [
+        { type: 'text' as const, text: `计划目录：${args.planDir}` },
+        ...args.steps.map(
+          (step: { title: string; file: string; requiresConfirmation?: boolean }, index: number) => ({
+            type: 'text' as const,
+            text: `${index + 1}. ${step.title} — ${step.file}${step.requiresConfirmation === true ? ' ⚠ 确认点' : ''}`,
+          }),
+        ),
+      ],
     }),
   })
 }

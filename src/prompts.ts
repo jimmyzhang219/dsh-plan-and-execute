@@ -33,6 +33,7 @@ export function PLANNING_SECTION_BODY(planDir: string): string {
     '  用户会审批；被驳回时按反馈修改文件后重新提交。',
     '- 不要调用 exit_plan_mode——它属于 dsh 的 plan-mode 功能，本编排不使用；',
     '  计划审批只通过 submit_plan 完成。',
+    '调用 submit_plan 时，planDir 参数必须原样传回上面的目录（不要改写或省略）。',
   ].join('\n')
 }
 
@@ -56,6 +57,7 @@ export function kickoffInstruction(task: string, planDir: string): UserMessage {
     [
       `Plan-and-Execute 编排开始。任务：${task}`,
       `请进入规划阶段：调研后把每一步写成 Markdown 文件到 ${planDir}/，然后调用 submit_plan 提交清单供审批。`,
+      '调用 submit_plan 时，planDir 参数必须原样传回上面的目录（不要改写或省略）。',
     ].join('\n'),
     `plan-and-execute：开始规划（${task}）`,
   )

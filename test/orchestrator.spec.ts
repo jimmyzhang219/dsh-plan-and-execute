@@ -354,6 +354,50 @@ describe('确认点 / replan / revive', () => {
   })
 })
 
+describe('submitPlan planDir 校验', () => {
+  it('planDir 与编排目录不一致 → 拒绝', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const { FakeAgent, FakeStorage, fakeAsk } = await import('./helpers.ts')
+    const { mkdtemp } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-dir-'))
+    const orchestrator = new Orchestrator({
+      agent: new FakeAgent(),
+      ask: fakeAsk().ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage: new FakeStorage(),
+    })
+    await orchestrator.begin('T')
+    const verdict = await orchestrator.submitPlan(`${planDir}/..`, [
+      { file: 'a.md', title: 'A' },
+    ])
+    expect(verdict.approved).toBe(false)
+    expect((verdict as { error: string }).error).toContain('planDir')
+  })
+
+  it('尾部斜杠差异不算不一致（归一化后相等）', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const { FakeAgent, FakeStorage, fakeAsk, answer } = await import('./helpers.ts')
+    const { mkdtemp, writeFile } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-dir-'))
+    const orchestrator = new Orchestrator({
+      agent: new FakeAgent(),
+      ask: fakeAsk(answer('pae-approve', '批准')).ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage: new FakeStorage(),
+    })
+    await orchestrator.begin('T')
+    await writeFile(join(planDir, 'a.md'), '# A\n内容', 'utf8')
+    const verdict = await orchestrator.submitPlan(`${planDir}/`, [{ file: 'a.md', title: 'A' }])
+    expect(verdict.approved).toBe(true)
+  })
+})
+
 describe('生命周期钩子', () => {
   it('begin 触发 onActivate，finish(completed) 触发 onRestore', async () => {
     const activated: number[] = []

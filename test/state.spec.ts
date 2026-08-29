@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { buildTodoPayload, isPlanModeActive } from '../src/state.ts'
+import { buildTodoPayload, isPlanModeActive, normalizeDir } from '../src/state.ts'
 
 describe('buildTodoPayload', () => {
   it('按状态表构造整表快照，缺省 pending', () => {
@@ -31,5 +31,13 @@ describe('isPlanModeActive', () => {
     expect(isPlanModeActive(events)).toBe(false)
     expect(isPlanModeActive([events[0]!])).toBe(true)
     expect(isPlanModeActive([])).toBe(false)
+  })
+})
+
+describe('normalizeDir', () => {
+  it('去尾部斜杠', () => {
+    expect(normalizeDir('/a/b/')).toBe('/a/b')
+    expect(normalizeDir('/a/b///')).toBe('/a/b')
+    expect(normalizeDir('/a/b')).toBe('/a/b')
   })
 })

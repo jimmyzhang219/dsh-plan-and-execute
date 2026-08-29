@@ -135,7 +135,7 @@ export async function makeOrchestrator(
   for (const step of steps) {
     await writeFile(join(planDir, step.file), `# ${step.title}\n内容`, 'utf8')
   }
-  const verdict = await orchestrator.submitPlan(steps, '测试计划')
+  const verdict = await orchestrator.submitPlan(planDir, steps, '测试计划')
   return { orchestrator, agent, ask, received, verdict, steps, planDir, storage }
 }
 

@@ -61,6 +61,11 @@ export function buildTodoPayload(
   }
 }
 
+/** 目录归一化（去尾部斜杠；planDir 校验用）。 */
+export function normalizeDir(path: string): string {
+  return path.replace(/\/+$/, '')
+}
+
 /**
  * 宿主 plan-mode 是否激活。不依赖 dsh-plan-mode 包类型：事件类型不在本工程
  * 编译单元的 SessionEventMap 联合里，读 data 需要一次断言（唯一一处）。

@@ -32,6 +32,7 @@ import {
 } from './prompts.ts'
 import {
   buildTodoPayload,
+  normalizeDir,
   type PaePausedReason,
   type PaePhase,
   type PaePlanPayload,
@@ -245,6 +246,7 @@ export class Orchestrator {
 
   /** submit_plan 工具入口：校验 + 审批。批准即启动执行循环。 */
   async submitPlan(
+    planDir: string,
     steps: readonly PlanStep[],
     summary?: string,
   ): Promise<{ approved: true } | { approved: false; error: string }> {
@@ -252,6 +254,12 @@ export class Orchestrator {
       return {
         approved: false,
         error: 'submit_plan 仅在规划阶段可用（当前不在 plan-and-execute 规划中）',
+      }
+    }
+    if (normalizeDir(planDir) !== normalizeDir(this.deps.planDir)) {
+      return {
+        approved: false,
+        error: 'planDir 与编排计划目录不一致，请原样传回指令中给出的目录',
       }
     }
     const check = await validateManifest(this.deps.planDir, steps)
