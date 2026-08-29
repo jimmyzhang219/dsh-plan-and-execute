@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+# pnpm 11 不再读取 .npmrc 的 auto-install-peers，须写在此处（见根 .npmrc 注释：
+# 宿主包由 link-host 软链提供，绝不从 registry 安装 peer 依赖）。
+autoInstallPeers: false
