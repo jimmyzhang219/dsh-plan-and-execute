@@ -11,7 +11,6 @@ import type {
   ModelSelectionProjection,
   SessionRequestId,
 } from '@deepseek-ai/dsh-api-remotes/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 // Type-only：session 作用域标准钩子（sessionId/useProjection）与全局标准钩子。
@@ -145,10 +144,19 @@ function defaultSelection(count: number, defaultValue: string): Record<number, s
   return map
 }
 
+/**
+ * session 远端面的最小契约：组件只消费这三个方法，
+ * 注册入口传入真实 ClientRemote['session']（Pick 即真实签名，结构赋值零 as）。
+ */
+export type SessionRemoteLike = Pick<
+  ClientRemote['session'],
+  'modelCatalog' | 'canOpenWorkspacePath' | 'prompt'
+>
+
 /** submit_plan 卡片注入面（注册入口 inject 工厂返回）。 */
 export interface SubmitPlanCardInjected {
-  readonly sessionRemote: ClientRemote['session']
-  readonly connection: ConnectionHandle
+  readonly sessionRemote: SessionRemoteLike
+  readonly connection: { readonly isLoopback: boolean }
 }
 
 /** tool.call.toolview（key: submit_plan）注册入口的完整组件 props。 */
