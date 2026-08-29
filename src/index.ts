@@ -8,20 +8,26 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-// Type-only：激活各宿主包的 Context 合并（ctx.commands/tools/systemPrompt/事件类型）。
+// Type-only：激活各宿主包的 Context 合并（ctx.commands/tools/systemPrompt/sessionTitle/事件类型）。
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-questions'
+import type {} from '@deepseek-ai/dsh-session-title'
+// Type-only：todo/write 事件的 SessionEventMap 合并声明由 dsh-tool-todo 拥有。
+import type {} from '@deepseek-ai/dsh-tool-todo'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
 import { fileStorage } from './persist.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
 import { isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
 
+/** 插件名（命令名、编排目录命名空间）。 */
 export const name = 'plan-and-execute'
+/** 必需服务注入：工具注册表与 system-prompt 段落表。 */
 export const inject = ['tools', 'systemPrompt']
 
+/** 插件配置：失败策略、自愈上限、计划目录根。 */
 export interface Config {
   /** 步骤级失败策略：默认暂停问人。 */
   onStepFailure: 'pause' | 'auto-recover'
@@ -31,6 +37,7 @@ export interface Config {
   planDir: string
 }
 
+/** 配置 schema（dsh 装配层据此读取配置并生成表单）。 */
 export const Config: Schema<Config> = Schema.object({
   onStepFailure: Schema.union(['pause', 'auto-recover'])
     .description('步骤失败策略')
@@ -55,16 +62,23 @@ function toDriveAgent(agent: Agent): DriveAgent {
   }
 }
 
+/**
+ * 插件组合根：注册命令、模型侧工具、阶段 prompt 段落与恢复监听。
+ * @param ctx - dsh 上下文（commands/tools/systemPrompt/sessionTitle 等为可选服务）。
+ * @param config - 插件配置。
+ */
 export function apply(ctx: Context, config: Config): void {
   console.log('[plan-and-execute] plugin loaded')
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
 
+  /** 会话计划目录：<会话 cwd>/<planDir>/<sessionId>。 */
   const planDirOf = (agent: Agent): string => {
     const cwd = agent.session.header.cwd ?? process.cwd()
     return `${cwd}/${config.planDir}/${String(agent.id)}`
   }
 
+  /** 用户交互通道包装（部署无 userQuestions 时抛错）。 */
   const askFor = (agent: Agent) => (questions: AskUserQuestionItem[]) => {
     const service = ctx.get('userQuestions')
     if (service === undefined) throw new Error('no user-questions channel available')
@@ -95,6 +109,7 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  /** 取或建本会话的编排器（首次创建时注册释放钩子）。 */
   const ensure = (agent: Agent): Orchestrator => {
     const existing = orchestrators.get(agent.session as object)
     if (existing !== undefined) return existing
@@ -153,6 +168,17 @@ export function apply(ctx: Context, config: Config): void {
           void orchestrator.revive()
           return { kind: 'success', text: '已重新弹出暂停选项。' }
         }
+        // 新编排用任务文本钉住会话标题：无标题会话的显示回退链会退到 cwd
+        // basename（如 "deepseek-harness"）。已有标题（用户改过名/有过对话）
+        // 不覆盖；session-title 为可选服务（headless 未组合时跳过）。
+        const titles = ctx.get('sessionTitle')
+        if (titles !== undefined && titles.get(agent.session) === undefined) {
+          try {
+            titles.rename(agent.session, task)
+          } catch (error: unknown) {
+            ctx.logger.warn(`plan-and-execute: 会话标题写入失败：${String(error)}`)
+          }
+        }
         await orchestrator.begin(task)
         return {
           kind: 'success',
@@ -163,6 +189,7 @@ export function apply(ctx: Context, config: Config): void {
   )
 
   // —— 模型侧工具 ——
+  /** 会话 → 编排器查表（工具 execute 定位当前会话的编排器）。 */
   const lookup = (session: object): Orchestrator | undefined => orchestrators.get(session)
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))

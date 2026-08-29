@@ -14,9 +14,21 @@ function fakeCtx() {
     sections: [] as unknown[],
   }
   const listeners: Array<{ event: string; handler: (payload: unknown) => void }> = []
+  /** session-title 假服务：默认无标题、rename 记录调用（测试可经 ctx.get 取回改写）。 */
+  const sessionTitle = {
+    get: vi.fn<(session: unknown) => unknown>(() => undefined),
+    rename: vi.fn<(session: unknown, title: string) => unknown>(() => ({
+      title: '',
+      messageSeqs: [],
+      source: { kind: 'user' },
+      eventSeq: 1,
+      updatedAt: 0,
+    })),
+  }
   const ctx = {
     registered,
     listeners,
+    sessionTitle,
     commands: {
       register: (definition: Record<string, unknown>) => {
         registered.commands.push(definition)
@@ -43,7 +55,10 @@ function fakeCtx() {
       setup(ctx)
       return () => {}
     },
-    get: vi.fn<(key: string) => unknown>(() => ({ ask: async () => ({ answers: [] }) })),
+    get: vi.fn<(key: string) => unknown>((key) => {
+      if (key === 'sessionTitle') return sessionTitle
+      return { ask: async () => ({ answers: [] }) }
+    }),
     effect: vi.fn(() => () => {}),
     logger: { info: () => {}, warn: () => {} },
   }
@@ -153,6 +168,72 @@ describe('apply 装配', () => {
     const handler = ctx.registered.commands[0]!.handler as (
       invocation: Record<string, unknown>,
     ) => Promise<unknown>
+    const agent = fakeAgent('none')
+    const result = await handler({ agent, rawInput: '重构登录模块' })
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(agent.steer).toHaveBeenCalledTimes(1)
+  })
+
+  it('启动编排 → 用任务文本重命名会话标题（无持久化标题时）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    const agent = fakeAgent('none')
+    const result = await handler({ agent, rawInput: '重构登录模块' })
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(ctx.sessionTitle.get).toHaveBeenCalledWith(agent.session)
+    expect(ctx.sessionTitle.rename).toHaveBeenCalledWith(agent.session, '重构登录模块')
+  })
+
+  it('会话已有持久化标题 → 不覆盖（rename 不被调用）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    ctx.sessionTitle.get.mockReturnValue({
+      title: '已有标题',
+      messageSeqs: [1],
+      source: { kind: 'user' },
+      eventSeq: 1,
+      updatedAt: 0,
+    })
+    const agent = fakeAgent('none')
+    const result = await handler({ agent, rawInput: '重构登录模块' })
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(ctx.sessionTitle.rename).not.toHaveBeenCalled()
+  })
+
+  it('部署无 session-title 服务 → 跳过重命名，编排正常启动', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    ctx.get.mockImplementation((key) =>
+      key === 'sessionTitle' ? undefined : { ask: async () => ({ answers: [] }) },
+    )
+    const agent = fakeAgent('none')
+    const result = await handler({ agent, rawInput: '重构登录模块' })
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(agent.steer).toHaveBeenCalledTimes(1)
+  })
+
+  it('rename 抛错（服务异常）→ 容错，编排正常启动', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    ctx.sessionTitle.rename.mockImplementation(() => {
+      throw new Error('session-title service disposed')
+    })
     const agent = fakeAgent('none')
     const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })

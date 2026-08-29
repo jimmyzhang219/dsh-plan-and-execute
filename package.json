@@ -42,7 +42,9 @@
     "@deepseek-ai/dsh-commands": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-session-title": "*",
     "@deepseek-ai/dsh-system-prompt": "*",
+    "@deepseek-ai/dsh-tool-todo": "*",
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-user-questions": "*"
   },
