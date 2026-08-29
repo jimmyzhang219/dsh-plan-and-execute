@@ -40,6 +40,11 @@ describe('resolveCurrentModel', () => {
       .toEqual({ provider: 'l', model: 'u' })
     expect(resolveCurrentModel(catalog, undefined)).toEqual(catalog.default)
   })
+  it('宿主投影为 null 时回退 lastUsed / catalog.default', () => {
+    expect(resolveCurrentModel(catalog, { next: null, lastUsed: { provider: 'l', model: 'u' } }))
+      .toEqual({ provider: 'l', model: 'u' })
+    expect(resolveCurrentModel(catalog, { next: null, lastUsed: null })).toEqual(catalog.default)
+  })
 })
 
 describe('parseCardArgs', () => {

@@ -33,10 +33,10 @@ export interface ModelCatalogLike {
   }>
 }
 
-/** 会话模型选择投影（next ?? lastUsed 语义与宿主 ModelDirectory 一致）。 */
+/** 会话模型选择投影（next ?? lastUsed 语义与宿主 ModelSelectionProjection 一致；null = 未设置）。 */
 export interface ModelSelectionProjectionLike {
-  readonly next?: { readonly provider: string; readonly model: string }
-  readonly lastUsed?: { readonly provider: string; readonly model: string }
+  readonly next?: { readonly provider: string; readonly model: string } | null
+  readonly lastUsed?: { readonly provider: string; readonly model: string } | null
 }
 
 /** 校验并解析 submit_plan 原始参数；形状不符返回 undefined。 */
