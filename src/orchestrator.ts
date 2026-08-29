@@ -36,6 +36,7 @@ import {
   type PaePausedReason,
   type PaePhase,
   type PaePlanPayload,
+  type PaeStepModel,
   type PaeStepReportPayload,
   type PlanStep,
 } from './state.ts'
@@ -115,6 +116,8 @@ interface RuntimeState {
   stepReports: Map<number, PaeStepReportPayload>
   /** 各步 todo 状态（键为 1-based 步号）。 */
   statuses: Map<number, TodoItem['status']>
+  /** 各步模型选择（键为 1-based 步号；缺省 = 用会话当前模型）。 */
+  stepModels: Map<number, PaeStepModel>
   /** 被跳过（skip）的步骤号集合。 */
   skipped: Set<number>
 }
@@ -142,6 +145,7 @@ export class Orchestrator {
     phase: 'none',
     stepReports: new Map(),
     statuses: new Map(),
+    stepModels: new Map(),
     skipped: new Set(),
   }
 
@@ -213,6 +217,7 @@ export class Orchestrator {
     this.state.plan = undefined
     this.state.stepReports.clear()
     this.state.statuses.clear()
+    this.state.stepModels.clear()
     this.state.skipped.clear()
     this.reportSeq = 0
     this.reportWatermark = 0
@@ -306,11 +311,43 @@ export class Orchestrator {
     this.state.stepIndex = 0
     this.state.stepReports.clear()
     this.state.statuses.clear()
+    this.state.stepModels.clear() // 新计划作废旧映射
     this.state.skipped.clear()
     await this.save()
     this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
     this.approval?.resolve(plan)
     return { approved: true }
+  }
+
+  /**
+   * 设置各步执行模型（Web UI 卡片经命令调用）。允许 planning/paused/executing
+   * 阶段：paused/executing 下对当前步即时生效（waterfall 逐请求读取）。
+   * @returns 失败原因或成功。
+   */
+  async applyStepModels(
+    models: Readonly<Record<number, PaeStepModel>>,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const plan = this.state.plan
+    if (this.state.phase !== 'planning' && plan === undefined) {
+      return { ok: false, error: '没有已提交的计划，无法设置步骤模型' }
+    }
+    if (plan !== undefined) {
+      for (const key of Object.keys(models)) {
+        const index = Number(key)
+        if (!Number.isInteger(index) || index < 1 || index > plan.steps.length) {
+          return { ok: false, error: `步骤号 ${key} 超出计划范围（1..${plan.steps.length}）` }
+        }
+      }
+    }
+    this.state.stepModels = new Map(Object.entries(models).map(([k, v]) => [Number(k), v]))
+    await this.save()
+    return { ok: true }
+  }
+
+  /** 当前执行步的模型选择（仅 executing/paused 阶段透出；无映射返回 undefined）。 */
+  stepModelFor(stepIndex: number): PaeStepModel | undefined {
+    if (this.state.phase !== 'executing' && this.state.phase !== 'paused') return undefined
+    return this.state.stepModels.get(stepIndex)
   }
 
   /** report_step 工具入口（按显式步号；步号由编排器判定，防伪造）。 */
@@ -499,6 +536,7 @@ export class Orchestrator {
   private async enterReplan(plan: PaePlanPayload, _feedback: string): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
+    this.state.stepModels.clear()
     await this.save()
     this.deps.agent.steer(replanInstruction(this.lastFeedback, plan.steps.length))
     this.armApproval()
@@ -635,6 +673,7 @@ export class Orchestrator {
     const restored = restoreState(persisted)
     this.state.stepReports = restored.stepReports
     this.state.statuses = restored.statuses
+    this.state.stepModels = restored.stepModels
     this.state.skipped = restored.skipped
     this.reportSeq = restored.stepReports.size
     this.reportWatermark = this.reportSeq

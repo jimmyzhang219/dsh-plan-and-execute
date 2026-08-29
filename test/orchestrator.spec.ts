@@ -445,3 +445,95 @@ describe('生命周期钩子', () => {
     await revivePromise
   })
 })
+
+describe('applyStepModels / stepModelFor', () => {
+  it('planning 阶段 apply 成功并持久化；begin 后 cleared', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const { FakeAgent, FakeStorage, fakeAsk } = await import('./helpers.ts')
+    const { mkdtemp } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-models-'))
+    const storage = new FakeStorage()
+    const orchestrator = new Orchestrator({
+      agent: new FakeAgent(),
+      ask: fakeAsk().ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage,
+    })
+    await orchestrator.begin('T')
+    expect(orchestrator.stepModelFor(1)).toBeUndefined() // planning 阶段不透出
+    const result = await orchestrator.applyStepModels({ 1: { provider: 'a', model: 'm' } })
+    expect(result).toEqual({ ok: true })
+    expect(storage.state?.stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
+    await orchestrator.begin('T2') // 新编排清空映射
+    expect(storage.state?.stepModels).toBeUndefined()
+  })
+
+  it('无已提交计划 → 拒绝；步骤号越界 → 拒绝', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const { FakeAgent, FakeStorage, fakeAsk } = await import('./helpers.ts')
+    const { mkdtemp } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-models-'))
+    const orchestrator = new Orchestrator({
+      agent: new FakeAgent(),
+      ask: fakeAsk().ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage: new FakeStorage(),
+    })
+    // 未 begin（无计划且非 planning）→ 拒绝；planning 阶段允许预设置（见首个用例）
+    const noPlan = await orchestrator.applyStepModels({ 1: { provider: 'a', model: 'm' } })
+    expect(noPlan.ok).toBe(false)
+    if (!noPlan.ok) expect(noPlan.error).toContain('计划')
+    // 批准后 applyStepModels({3:...}) → 拒绝（1..2 之外）
+    const { orchestrator: orch } = await makeOrchestrator(
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
+      [answer('pae-approve', '批准')],
+    )
+    const outOfRange = await orch.applyStepModels({ 3: { provider: 'b', model: 'm2' } })
+    expect(outOfRange.ok).toBe(false)
+    if (!outOfRange.ok) expect(outOfRange.error).toContain('1..2')
+  })
+
+  it('executing 阶段 stepModelFor 命中映射；无映射透传 undefined', async () => {
+    const { orchestrator } = await makeOrchestrator(
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
+      [answer('pae-approve', '批准')],
+    )
+    const result = await orchestrator.applyStepModels({ 2: { provider: 'b', model: 'm2' } })
+    expect(result).toEqual({ ok: true })
+    expect(orchestrator.stepModelFor(2)).toEqual({ provider: 'b', model: 'm2' })
+    expect(orchestrator.stepModelFor(1)).toBeUndefined()
+  })
+
+  it('revive 从持久化恢复 stepModels', async () => {
+    const revived = new FakeRevivedSession()
+    revived.storage.state = {
+      ...revived.storage.state!,
+      stepModels: { 1: { provider: 'a', model: 'm' } },
+    }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0) // 恢复询问挂起即可，不必走完
+    expect(orchestrator.stepModelFor(1)).toEqual({ provider: 'a', model: 'm' })
+    revived.resolveResume(answer('pae-resume', '终止'))
+    await revivePromise
+  })
+})

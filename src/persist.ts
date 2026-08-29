@@ -7,7 +7,13 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
-import type { PaePausedReason, PaePhase, PaePlanPayload, PaeStepReportPayload } from './state.ts'
+import type {
+  PaePausedReason,
+  PaePhase,
+  PaePlanPayload,
+  PaeStepModel,
+  PaeStepReportPayload,
+} from './state.ts'
 
 /** JSON 安全的编排状态快照（Map/Set 已转 Record/数组）。 */
 export interface PersistedOrchestratorState {
@@ -27,6 +33,8 @@ export interface PersistedOrchestratorState {
   readonly stepReports: readonly PaeStepReportPayload[]
   /** 各步 todo 状态（键为 1-based 步号）。 */
   readonly statuses: Readonly<Record<number, TodoItem['status']>>
+  /** 各步模型选择（键为 1-based 步号；缺省 = 用会话当前模型）。 */
+  readonly stepModels?: Readonly<Record<number, PaeStepModel>>
   /** 被跳过（skip）的步骤号集合。 */
   readonly skipped: readonly number[]
 }
@@ -90,6 +98,7 @@ export function snapshotState(state: {
   plan?: PaePlanPayload
   stepReports: ReadonlyMap<number, PaeStepReportPayload>
   statuses: ReadonlyMap<number, TodoItem['status']>
+  stepModels: ReadonlyMap<number, PaeStepModel>
   skipped: ReadonlySet<number>
 }): PersistedOrchestratorState {
   return {
@@ -101,6 +110,7 @@ export function snapshotState(state: {
     ...(state.plan === undefined ? {} : { plan: state.plan }),
     stepReports: [...state.stepReports.values()],
     statuses: Object.fromEntries(state.statuses) as Record<number, TodoItem['status']>,
+    ...(state.stepModels.size === 0 ? {} : { stepModels: Object.fromEntries(state.stepModels) }),
     skipped: [...state.skipped],
   }
 }
@@ -109,11 +119,13 @@ export function snapshotState(state: {
 export function restoreState(persisted: PersistedOrchestratorState): {
   stepReports: Map<number, PaeStepReportPayload>
   statuses: Map<number, TodoItem['status']>
+  stepModels: Map<number, PaeStepModel>
   skipped: Set<number>
 } {
   return {
     stepReports: new Map(persisted.stepReports.map((report) => [report.stepIndex, report])),
     statuses: new Map(Object.entries(persisted.statuses).map(([k, v]) => [Number(k), v])),
+    stepModels: new Map(Object.entries(persisted.stepModels ?? {}).map(([k, v]) => [Number(k), v])),
     skipped: new Set(persisted.skipped),
   }
 }

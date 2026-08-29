@@ -38,6 +38,16 @@ export interface PaePlanPayload {
   readonly steps: readonly PlanStep[]
 }
 
+/** 单步模型选择（Web UI 步骤卡片设置；apply 后执行期按步生效）。 */
+export interface PaeStepModel {
+  /** 注册的 provider 路由。 */
+  readonly provider: string
+  /** provider 拥有的模型 id。 */
+  readonly model: string
+  /** adapter 持有的 reasoning effort（可缺省）。 */
+  readonly reasoningEffort?: string
+}
+
 /** report_step 的单步汇报载荷（内存态；不写会话日志）。 */
 export interface PaeStepReportPayload {
   /** 汇报的步骤号（1-based）。 */

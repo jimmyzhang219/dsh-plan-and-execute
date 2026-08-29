@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { buildTodoPayload, isPlanModeActive, normalizeDir } from '../src/state.ts'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
+import { restoreState, snapshotState } from '../src/persist.ts'
+import {
+  buildTodoPayload,
+  isPlanModeActive,
+  normalizeDir,
+  type PaeStepReportPayload,
+} from '../src/state.ts'
 
 describe('buildTodoPayload', () => {
   it('按状态表构造整表快照，缺省 pending', () => {
@@ -39,5 +46,25 @@ describe('normalizeDir', () => {
     expect(normalizeDir('/a/b/')).toBe('/a/b')
     expect(normalizeDir('/a/b///')).toBe('/a/b')
     expect(normalizeDir('/a/b')).toBe('/a/b')
+  })
+})
+
+describe('stepModels 持久化往返', () => {
+  it('snapshotState 仅非空输出；restoreState 还原为 Map', () => {
+    const base = {
+      phase: 'executing' as const,
+      stepReports: new Map<number, PaeStepReportPayload>(),
+      statuses: new Map<number, TodoItem['status']>(),
+      skipped: new Set<number>(),
+    }
+    const empty = snapshotState({ ...base, stepModels: new Map() })
+    expect('stepModels' in empty).toBe(false)
+    const filled = snapshotState({
+      ...base,
+      stepModels: new Map([[1, { provider: 'a', model: 'm' }]]),
+    })
+    expect(filled.stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
+    const restored = restoreState(filled)
+    expect(restored.stepModels).toEqual(new Map([[1, { provider: 'a', model: 'm' }]]))
   })
 })
