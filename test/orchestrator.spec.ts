@@ -489,6 +489,11 @@ describe('applyStepModels / stepModelFor', () => {
     const noPlan = await orchestrator.applyStepModels({ 1: { provider: 'a', model: 'm' } })
     expect(noPlan.ok).toBe(false)
     if (!noPlan.ok) expect(noPlan.error).toContain('计划')
+    // planning（无 plan）只校验正整数：0 号 → 拒绝
+    await orchestrator.begin('T')
+    const nonPositive = await orchestrator.applyStepModels({ 0: { provider: 'a', model: 'm' } })
+    expect(nonPositive.ok).toBe(false)
+    if (!nonPositive.ok) expect(nonPositive.error).toContain('0')
     // 批准后 applyStepModels({3:...}) → 拒绝（1..2 之外）
     const { orchestrator: orch } = await makeOrchestrator(
       [
@@ -500,6 +505,31 @@ describe('applyStepModels / stepModelFor', () => {
     const outOfRange = await orch.applyStepModels({ 3: { provider: 'b', model: 'm2' } })
     expect(outOfRange.ok).toBe(false)
     if (!outOfRange.ok) expect(outOfRange.error).toContain('1..2')
+  })
+
+  it('planning 预设置模型后 submitPlan 批准 → 映射保留（批准不清空）', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const { FakeAgent, FakeStorage, fakeAsk, answer } = await import('./helpers.ts')
+    const { mkdtemp, writeFile } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-models-'))
+    const storage = new FakeStorage()
+    const orchestrator = new Orchestrator({
+      agent: new FakeAgent(),
+      ask: fakeAsk(answer('pae-approve', '批准')).ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage,
+    })
+    await orchestrator.begin('T')
+    const result = await orchestrator.applyStepModels({ 1: { provider: 'a', model: 'm' } })
+    expect(result).toEqual({ ok: true })
+    await writeFile(join(planDir, 'a.md'), '# A\n内容', 'utf8')
+    const verdict = await orchestrator.submitPlan(planDir, [{ file: 'a.md', title: 'A' }])
+    expect(verdict).toEqual({ approved: true })
+    expect(storage.state?.stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
+    expect(orchestrator.stepModelFor(1)).toEqual({ provider: 'a', model: 'm' })
   })
 
   it('executing 阶段 stepModelFor 命中映射；无映射透传 undefined', async () => {

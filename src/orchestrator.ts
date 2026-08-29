@@ -311,7 +311,7 @@ export class Orchestrator {
     this.state.stepIndex = 0
     this.state.stepReports.clear()
     this.state.statuses.clear()
-    this.state.stepModels.clear() // 新计划作废旧映射
+    // 不清空 stepModels：批准非新计划（begin/enterReplan 已覆盖），审批前设置须存活到执行期
     this.state.skipped.clear()
     await this.save()
     this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
@@ -322,21 +322,29 @@ export class Orchestrator {
   /**
    * 设置各步执行模型（Web UI 卡片经命令调用）。允许 planning/paused/executing
    * 阶段：paused/executing 下对当前步即时生效（waterfall 逐请求读取）。
+   * planning 无已提交计划时仅校验步骤号为正整数（越界条目执行期惰性无害）；
+   * 计划存在时校验 1..步数 边界。
    * @returns 失败原因或成功。
    */
   async applyStepModels(
     models: Readonly<Record<number, PaeStepModel>>,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const plan = this.state.plan
-    if (this.state.phase !== 'planning' && plan === undefined) {
+    if (
+      this.state.phase === 'none' ||
+      this.state.phase === 'completed' ||
+      this.state.phase === 'aborted'
+    ) {
       return { ok: false, error: '没有已提交的计划，无法设置步骤模型' }
     }
-    if (plan !== undefined) {
-      for (const key of Object.keys(models)) {
-        const index = Number(key)
+    const plan = this.state.plan
+    for (const key of Object.keys(models)) {
+      const index = Number(key)
+      if (plan !== undefined) {
         if (!Number.isInteger(index) || index < 1 || index > plan.steps.length) {
           return { ok: false, error: `步骤号 ${key} 超出计划范围（1..${plan.steps.length}）` }
         }
+      } else if (!Number.isInteger(index) || index < 1) {
+        return { ok: false, error: `步骤号 ${key} 非法（须为正整数）` }
       }
     }
     this.state.stepModels = new Map(Object.entries(models).map(([k, v]) => [Number(k), v]))
