@@ -219,7 +219,8 @@ export function apply(ctx: Context, config: Config): void {
       name: 'plan-and-execute-set-models',
       description:
         'Plan-and-Execute：设置各步骤执行模型（Web UI 步骤卡片调用）。' +
-        '载荷为 JSON：{"1":{"provider":"...","model":"..."}}（步骤号 1-based）。',
+        '载荷为 JSON：{"1":{"provider":"...","model":"..."}}（步骤号 1-based）；' +
+        '空载荷 {} 会清空全部步骤的模型选择（恢复为会话当前模型）。',
       input: { hint: '<json>' },
       handler: async ({ agent, rawInput }) => {
         const orchestrator = lookup(agent.session as object)
@@ -273,7 +274,9 @@ export function apply(ctx: Context, config: Config): void {
             ...(resolved.reasoningEffort === undefined
               ? {}
               : { reasoningEffort: resolved.reasoningEffort }),
-            ...(typeof v.reasoningEffort === 'string' ? { reasoningEffort: v.reasoningEffort } : {}),
+            ...(typeof v.reasoningEffort === 'string'
+              ? { reasoningEffort: v.reasoningEffort }
+              : {}),
           }
         }
         const result = await orchestrator.applyStepModels(models)
