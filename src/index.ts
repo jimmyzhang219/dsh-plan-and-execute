@@ -7,6 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 // Type-only：激活各宿主包的 Context 合并（ctx.commands/tools/systemPrompt/sessionTitle/事件类型）。
 import type {} from '@deepseek-ai/dsh-commands'
@@ -19,7 +20,7 @@ import type {} from '@deepseek-ai/dsh-tool-todo'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
 import { fileStorage } from './persist.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
-import { isPlanModeActive } from './state.ts'
+import { isPlanModeActive, type PaeStepModel } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
 
 /** 插件名（命令名、编排目录命名空间）。 */
@@ -132,11 +133,35 @@ export function apply(ctx: Context, config: Config): void {
     })
     orchestrators.set(agent.session as object, orchestrator)
     ctx.effect(() => () => orchestrator.dispose(), 'plan-and-execute: dispose orchestrators')
+    // 每步模型切换：agent/request waterfall 按当前步覆盖 LlmCallConfig。
+    // 与宿主 installModelSelection 同一机制（后注册者最后覆盖）；无映射时透传。
+    const disposeStepModel = agent.ctx.on(
+      'agent/request',
+      async (_payload: unknown, next: () => Promise<LlmCallConfig>): Promise<LlmCallConfig> => {
+        const resolved = await next()
+        const stepIndex = orchestrator.snapshot().stepIndex ?? 0
+        const selected = orchestrator.stepModelFor(stepIndex)
+        if (selected === undefined) return resolved
+        return {
+          ...resolved,
+          provider: selected.provider,
+          model: selected.model,
+          // PaeStepModel.reasoningEffort 为普通 string；LlmCallConfig 为品牌类型，
+          // 断言进品牌槽（可用性由适配器在实际调用时校验）。
+          ...(selected.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: selected.reasoningEffort as LlmCallConfig['reasoningEffort'] }),
+        }
+      },
+    )
+    ctx.effect(() => () => disposeStepModel(), 'plan-and-execute: step model waterfall')
     return orchestrator
   }
 
   // —— 命令入口（命令注册表为可选服务：headless 部署无 commands 时插件仍可加载）——
-  ctx.inject(['commands'], (commandCtx) =>
+  /** 会话 → 编排器查表（两个命令与模型侧工具定位当前会话的编排器）。 */
+  const lookup = (session: object): Orchestrator | undefined => orchestrators.get(session)
+  ctx.inject(['commands'], (commandCtx) => {
     commandCtx.commands.register({
       name: 'plan-and-execute',
       description: 'Plan-and-Execute：规划 → 审批 → 逐步执行（支持确认点与失败暂停）',
@@ -185,12 +210,77 @@ export function apply(ctx: Context, config: Config): void {
           text: 'Plan-and-Execute 已启动：进入规划阶段，等待模型提交计划。',
         }
       },
-    }),
-  )
+    })
+    commandCtx.commands.register({
+      name: 'plan-and-execute-set-models',
+      description:
+        'Plan-and-Execute：设置各步骤执行模型（Web UI 步骤卡片调用）。' +
+        '载荷为 JSON：{"1":{"provider":"...","model":"..."}}（步骤号 1-based）。',
+      input: { hint: '<json>' },
+      handler: async ({ agent, rawInput }) => {
+        const orchestrator = lookup(agent.session as object)
+        if (orchestrator === undefined) {
+          return { kind: 'error', text: '当前会话没有 plan-and-execute 编排' }
+        }
+        // ctx.get 的泛型重载约束为 Context 服务名，外部服务名须用 as 断言形状
+        const llm = ctx.get('llm') as
+          | {
+              resolveCallConfig: (c: {
+                provider: string
+                model: string
+              }) => Promise<{ provider: string; model: string; reasoningEffort?: string }>
+            }
+          | undefined
+        if (llm === undefined) return { kind: 'error', text: '当前部署没有 llm 服务，无法校验模型' }
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(rawInput.trim())
+        } catch {
+          return { kind: 'error', text: '载荷不是合法 JSON' }
+        }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          return { kind: 'error', text: '载荷必须是 {步骤号: {provider, model}} 对象' }
+        }
+        const models: Record<number, PaeStepModel> = {}
+        for (const [key, value] of Object.entries(parsed)) {
+          const index = Number(key)
+          const v = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+          if (
+            !Number.isInteger(index) ||
+            typeof v?.provider !== 'string' ||
+            typeof v?.model !== 'string'
+          ) {
+            return { kind: 'error', text: `第 ${key} 项缺少 provider/model 字符串字段` }
+          }
+          let resolved: { provider: string; model: string; reasoningEffort?: string }
+          try {
+            resolved = await llm.resolveCallConfig({ provider: v.provider, model: v.model })
+          } catch (error) {
+            return {
+              kind: 'error',
+              text: `模型 ${v.provider}/${v.model} 不可用：${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            }
+          }
+          models[index] = {
+            provider: resolved.provider,
+            model: resolved.model,
+            ...(resolved.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: resolved.reasoningEffort }),
+            ...(typeof v.reasoningEffort === 'string' ? { reasoningEffort: v.reasoningEffort } : {}),
+          }
+        }
+        const result = await orchestrator.applyStepModels(models)
+        return result.ok
+          ? { kind: 'success', text: `已设置 ${Object.keys(models).length} 个步骤的模型` }
+          : { kind: 'error', text: result.error }
+      },
+    })
+  })
 
   // —— 模型侧工具 ——
-  /** 会话 → 编排器查表（工具 execute 定位当前会话的编排器）。 */
-  const lookup = (session: object): Orchestrator | undefined => orchestrators.get(session)
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
 
