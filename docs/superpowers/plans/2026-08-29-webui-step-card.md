@@ -350,7 +350,7 @@ git commit -m "feat: submit_plan 参数携带 planDir 并校验（Web UI 打开�
 
 ```ts
 describe('applyStepModels / stepModelFor', () => {
-  it('planning 阶段 apply 成功并持久化；begin 后 cleared', async () => {
+  it('planning 阶段 apply 成功并持久化；begin 后 cleared；批准后保留', async () => {
     const { Orchestrator } = await import('../src/orchestrator.ts')
     const { FakeAgent, FakeStorage, fakeAsk } = await import('./helpers.ts')
     const { mkdtemp } = await import('node:fs/promises')
@@ -439,7 +439,7 @@ export interface PaeStepModel {
 `src/orchestrator.ts`：
 - `RuntimeState` 加 `stepModels: Map<number, PaeStepModel>`，初始化 `new Map()`。
 - `begin()`（`src/orchestrator.ts:203-221`）与 `enterReplan`（`:490-496`）各加 `this.state.stepModels.clear()`。
-- `submitPlan` 批准分支（`:290-304`）加 `this.state.stepModels.clear()`（新计划作废旧映射）。
+- `submitPlan` 批准分支**不清空** stepModels（2026-08-29 裁定：批准不是新计划；begin/enterReplan 已覆盖清理语义；审批前设置的模型必须存活到执行期）。
 - 新增两个方法：
 
 ```ts
@@ -452,12 +452,19 @@ export interface PaeStepModel {
     models: Readonly<Record<number, PaeStepModel>>,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     const plan = this.state.plan
-    if (plan === undefined) {
-      return { ok: false, error: '没有已提交的计划，无法设置步骤模型' }
+    if (
+      this.state.phase === 'none' ||
+      this.state.phase === 'completed' ||
+      this.state.phase === 'aborted'
+    ) {
+      return { ok: false, error: '当前阶段不可设置步骤模型' }
     }
     for (const key of Object.keys(models)) {
       const index = Number(key)
-      if (!Number.isInteger(index) || index < 1 || index > plan.steps.length) {
+      if (!Number.isInteger(index) || index < 1) {
+        return { ok: false, error: `步骤号 ${key} 不是正整数` }
+      }
+      if (plan !== undefined && index > plan.steps.length) {
         return { ok: false, error: `步骤号 ${key} 超出计划范围（1..${plan.steps.length}）` }
       }
     }
