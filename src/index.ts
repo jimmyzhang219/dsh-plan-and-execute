@@ -142,8 +142,12 @@ export function apply(ctx: Context, config: Config): void {
         const stepIndex = orchestrator.snapshot().stepIndex ?? 0
         const selected = orchestrator.stepModelFor(stepIndex)
         if (selected === undefined) return resolved
+        // 与宿主 installModelSelection 同一语义：先剥离 seed 继承的 reasoningEffort，
+        // 再按选择重加（否则会话模型带 effort 而映射模型不带时，effort 泄漏到映射模型，
+        // 不支持的组合会在 prepareCall 抛 UNSUPPORTED_REASONING_EFFORT）。
+        const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved
         return {
-          ...resolved,
+          ...withoutInheritedEffort,
           provider: selected.provider,
           model: selected.model,
           // PaeStepModel.reasoningEffort 为普通 string；LlmCallConfig 为品牌类型，

@@ -29,12 +29,10 @@ function fakeCtx() {
   }
   /** llm 假服务：模型可用性校验（resolveCallConfig 逐用例可改写）。 */
   const llm = {
-    resolveCallConfig: vi.fn(
-      async (c: { provider: string; model: string }) => ({
-        provider: c.provider,
-        model: c.model,
-      }),
-    ),
+    resolveCallConfig: vi.fn(async (c: { provider: string; model: string }) => ({
+      provider: c.provider,
+      model: c.model,
+    })),
   }
   const ctx = {
     registered,
@@ -398,8 +396,7 @@ describe('agent/request waterfall 按步切换模型', () => {
   function requestHandlerOf(agent: ReturnType<typeof fakeAgent>) {
     const onMock = agent.ctx.on as Mock
     return onMock.mock.calls.find(([event]) => event === 'agent/request')?.[1] as
-      | ((payload: unknown, next: () => Promise<LlmCallConfig>) => Promise<LlmCallConfig>)
-      | undefined
+      ((payload: unknown, next: () => Promise<LlmCallConfig>) => Promise<LlmCallConfig>) | undefined
   }
 
   it('executing 且当前步有映射 → 覆盖 provider/model，保留其余字段', async () => {
@@ -456,5 +453,106 @@ describe('agent/request waterfall 按步切换模型', () => {
     await expect(
       requestHandler!({}, async () => ({ provider: 's', model: 'm', maxTokens: 100 })),
     ).resolves.toEqual({ provider: 's', model: 'm', maxTokens: 100 })
+  })
+
+  it('映射无 effort → 剥离 seed 继承的 reasoningEffort（对齐宿主 installModelSelection）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('executing', {
+      stepIndex: 1,
+      plan: {
+        planDir: join(cwd, '.pae', 'sess-1'),
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B' },
+        ],
+      },
+    })
+    const agent = fakeAgent('executing')
+    await fireCreated(ctx, agent)
+    const requestHandler = requestHandlerOf(agent)
+    expect(requestHandler).toBeDefined()
+    const command = ctx.registered.commands[1]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    const applied = await command({ agent, rawInput: '{"1":{"provider":"p1","model":"m1"}}' })
+    expect(applied).toMatchObject({ kind: 'success' })
+    const returned = await requestHandler!({}, async () => ({
+      provider: 's',
+      model: 'm',
+      reasoningEffort: 'high' as LlmCallConfig['reasoningEffort'],
+    }))
+    expect(returned.provider).toBe('p1')
+    expect(returned.model).toBe('m1')
+    // 映射不带 effort → 继承的 effort 必须被删除（否则不支持的组合会在 prepareCall 抛错）
+    expect('reasoningEffort' in returned).toBe(false)
+  })
+
+  it('映射带 effort → 覆盖 seed（seed 的 high 被剥离、映射的 low 生效）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('executing', {
+      stepIndex: 1,
+      plan: {
+        planDir: join(cwd, '.pae', 'sess-1'),
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B' },
+        ],
+      },
+    })
+    const agent = fakeAgent('executing')
+    await fireCreated(ctx, agent)
+    const requestHandler = requestHandlerOf(agent)
+    expect(requestHandler).toBeDefined()
+    const command = ctx.registered.commands[1]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    const applied = await command({
+      agent,
+      rawInput: '{"1":{"provider":"p1","model":"m1","reasoningEffort":"low"}}',
+    })
+    expect(applied).toMatchObject({ kind: 'success' })
+    const returned = await requestHandler!({}, async () => ({
+      provider: 's',
+      model: 'm',
+      reasoningEffort: 'high' as LlmCallConfig['reasoningEffort'],
+    }))
+    expect(returned.reasoningEffort).toBe('low')
+  })
+
+  it('无映射 → 透传原样（含 seed 的 reasoningEffort）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('executing', {
+      stepIndex: 1,
+      plan: {
+        planDir: join(cwd, '.pae', 'sess-1'),
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B' },
+        ],
+      },
+    })
+    const agent = fakeAgent('executing')
+    await fireCreated(ctx, agent)
+    const requestHandler = requestHandlerOf(agent)
+    expect(requestHandler).toBeDefined()
+    const command = ctx.registered.commands[1]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    const applied = await command({ agent, rawInput: '{"2":{"provider":"p2","model":"m2"}}' })
+    expect(applied).toMatchObject({ kind: 'success' })
+    const returned = await requestHandler!({}, async () => ({
+      provider: 's',
+      model: 'm',
+      reasoningEffort: 'high' as LlmCallConfig['reasoningEffort'],
+    }))
+    expect(returned.provider).toBe('s')
+    expect(returned.model).toBe('m')
+    expect(returned.reasoningEffort).toBe('high')
   })
 })
