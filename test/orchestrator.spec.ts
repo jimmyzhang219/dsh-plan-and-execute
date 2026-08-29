@@ -471,7 +471,7 @@ describe('applyStepModels / stepModelFor', () => {
     expect(storage.state?.stepModels).toBeUndefined()
   })
 
-  it('无已提交计划 → 拒绝；步骤号越界 → 拒绝', async () => {
+  it('未开始阶段 → 拒绝；步骤号非正整数 → 拒绝；越界 → 拒绝', async () => {
     const { Orchestrator } = await import('../src/orchestrator.ts')
     const { FakeAgent, FakeStorage, fakeAsk } = await import('./helpers.ts')
     const { mkdtemp } = await import('node:fs/promises')
@@ -485,15 +485,17 @@ describe('applyStepModels / stepModelFor', () => {
       planDir,
       storage: new FakeStorage(),
     })
-    // 未 begin（无计划且非 planning）→ 拒绝；planning 阶段允许预设置（见首个用例）
+    // 未 begin（phase none）→ 拒绝；planning 阶段允许预设置（见首个用例）
     const noPlan = await orchestrator.applyStepModels({ 1: { provider: 'a', model: 'm' } })
     expect(noPlan.ok).toBe(false)
-    if (!noPlan.ok) expect(noPlan.error).toContain('计划')
-    // planning（无 plan）只校验正整数：0 号 → 拒绝
+    if (!noPlan.ok) expect(noPlan.error).toContain('当前阶段')
+    // planning（无 plan）只校验正整数：0/'1.5'/'abc' → 拒绝
     await orchestrator.begin('T')
-    const nonPositive = await orchestrator.applyStepModels({ 0: { provider: 'a', model: 'm' } })
-    expect(nonPositive.ok).toBe(false)
-    if (!nonPositive.ok) expect(nonPositive.error).toContain('0')
+    for (const key of ['0', '1.5', 'abc']) {
+      const bad = await orchestrator.applyStepModels({ [key]: { provider: 'a', model: 'm' } })
+      expect(bad.ok).toBe(false)
+      if (!bad.ok) expect(bad.error).toContain(`步骤号 ${key} 不是正整数`)
+    }
     // 批准后 applyStepModels({3:...}) → 拒绝（1..2 之外）
     const { orchestrator: orch } = await makeOrchestrator(
       [
@@ -504,7 +506,25 @@ describe('applyStepModels / stepModelFor', () => {
     )
     const outOfRange = await orch.applyStepModels({ 3: { provider: 'b', model: 'm2' } })
     expect(outOfRange.ok).toBe(false)
+    if (!outOfRange.ok) expect(outOfRange.error).toContain('超出计划范围')
     if (!outOfRange.ok) expect(outOfRange.error).toContain('1..2')
+  })
+
+  it('completed 阶段（计划仍存在）→ 拒绝，文案不误导为「没有已提交的计划」', async () => {
+    const revived = new FakeRevivedSession()
+    revived.storage.state = { ...revived.storage.state!, phase: 'completed' }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    await orchestrator.revive()
+    const result = await orchestrator.applyStepModels({ 1: { provider: 'a', model: 'm' } })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('当前阶段')
   })
 
   it('planning 预设置模型后 submitPlan 批准 → 映射保留（批准不清空）', async () => {

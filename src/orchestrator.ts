@@ -334,17 +334,16 @@ export class Orchestrator {
       this.state.phase === 'completed' ||
       this.state.phase === 'aborted'
     ) {
-      return { ok: false, error: '没有已提交的计划，无法设置步骤模型' }
+      return { ok: false, error: '当前阶段不可设置步骤模型' }
     }
     const plan = this.state.plan
     for (const key of Object.keys(models)) {
       const index = Number(key)
-      if (plan !== undefined) {
-        if (!Number.isInteger(index) || index < 1 || index > plan.steps.length) {
-          return { ok: false, error: `步骤号 ${key} 超出计划范围（1..${plan.steps.length}）` }
-        }
-      } else if (!Number.isInteger(index) || index < 1) {
-        return { ok: false, error: `步骤号 ${key} 非法（须为正整数）` }
+      if (!Number.isInteger(index) || index < 1) {
+        return { ok: false, error: `步骤号 ${key} 不是正整数` }
+      }
+      if (plan !== undefined && index > plan.steps.length) {
+        return { ok: false, error: `步骤号 ${key} 超出计划范围（1..${plan.steps.length}）` }
       }
     }
     this.state.stepModels = new Map(Object.entries(models).map(([k, v]) => [Number(k), v]))
