@@ -853,7 +853,7 @@ export function parseCardArgs(raw: unknown): CardArgs | undefined {
   const r = raw as { planDir?: unknown; summary?: unknown; steps?: unknown }
   if (typeof r.planDir !== 'string' || r.planDir === '') return undefined
   if (!Array.isArray(r.steps)) return undefined
-  const steps: CardArgs['steps'] = []
+  const steps: Array<CardArgs['steps'][number]> = [] // ReadonlyArray 无 push（strict 适配）
   for (const s of r.steps) {
     const step = s as { file?: unknown; title?: unknown; requiresConfirmation?: unknown }
     if (typeof step?.file !== 'string' || typeof step?.title !== 'string') return undefined
@@ -895,7 +895,7 @@ export function serializeStepModels(
 ): Record<number, { provider: string; model: string }> {
   const models: Record<number, { provider: string; model: string }> = {}
   for (const [key, value] of Object.entries(selection)) {
-    const [provider, model] = value.split('|')
+    const [provider = '', model = ''] = value.split('|') // noUncheckedIndexedAccess 解构默认值（strict 适配）
     models[Number(key)] = { provider, model }
   }
   return models
