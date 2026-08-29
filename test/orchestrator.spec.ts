@@ -370,9 +370,7 @@ describe('submitPlan planDir 校验', () => {
       storage: new FakeStorage(),
     })
     await orchestrator.begin('T')
-    const verdict = await orchestrator.submitPlan(`${planDir}/..`, [
-      { file: 'a.md', title: 'A' },
-    ])
+    const verdict = await orchestrator.submitPlan(`${planDir}/..`, [{ file: 'a.md', title: 'A' }])
     expect(verdict.approved).toBe(false)
     expect((verdict as { error: string }).error).toContain('planDir')
   })
@@ -584,6 +582,35 @@ describe('applyStepModels / stepModelFor', () => {
     await vi.waitFor(() => revived.receivedQuestions.length > 0) // 恢复询问挂起即可，不必走完
     expect(orchestrator.stepModelFor(1)).toEqual({ provider: 'a', model: 'm' })
     revived.resolveResume(answer('pae-resume', '终止'))
+    await revivePromise
+  })
+
+  it('paused 阶段（revive 恢复 + plan 存在）applyStepModels 成功、stepModelFor 命中', async () => {
+    const revived = new FakeRevivedSession()
+    revived.storage.state = {
+      ...revived.storage.state!,
+      phase: 'paused',
+      pausedReason: 'failure',
+    }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0) // 暂停弹窗挂起（phase 已置 paused）
+    const result = await orchestrator.applyStepModels({ 1: { provider: 'b', model: 'm2' } })
+    expect(result).toEqual({ ok: true })
+    expect(orchestrator.stepModelFor(1)).toEqual({ provider: 'b', model: 'm2' })
+    expect(orchestrator.stepModelFor(2)).toBeUndefined()
+    // plan 存在 → 越界仍拒绝
+    const out = await orchestrator.applyStepModels({ 3: { provider: 'b', model: 'm2' } })
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.error).toContain('超出计划范围')
+    revived.resolveResume(answer('pae-pause', '终止'))
     await revivePromise
   })
 })
