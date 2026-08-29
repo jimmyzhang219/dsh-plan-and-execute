@@ -62,6 +62,31 @@ export function parseCardArgs(raw: unknown): CardArgs | undefined {
   }
 }
 
+/**
+ * 旧会话 submit_plan 载荷缺 planDir 时的降级解析：步骤信息仍可展示，
+ * 打开路径不可用（planDir 置空串作标记）。仅 steps 合法时返回。
+ */
+export function degradedCardArgs(raw: unknown): CardArgs | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const r = raw as { summary?: unknown; steps?: unknown }
+  if (!Array.isArray(r.steps) || r.steps.length === 0) return undefined
+  const steps: Array<CardArgs['steps'][number]> = []
+  for (const s of r.steps) {
+    const step = s as { file?: unknown; title?: unknown; requiresConfirmation?: unknown }
+    if (typeof step?.file !== 'string' || typeof step?.title !== 'string') return undefined
+    steps.push({
+      file: step.file,
+      title: step.title,
+      ...(step.requiresConfirmation === true ? { requiresConfirmation: true } : {}),
+    })
+  }
+  return {
+    planDir: '',
+    ...(typeof r.summary === 'string' ? { summary: r.summary } : {}),
+    steps,
+  }
+}
+
 /** groups × models 展平为下拉选项（provider 前缀区分同名模型）。 */
 export function flattenCatalog(catalog: ModelCatalogLike): ModelOption[] {
   const options: ModelOption[] = []

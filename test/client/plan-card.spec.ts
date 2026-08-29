@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildSetModelsPrompt,
+  degradedCardArgs,
   flattenCatalog,
   parseCardArgs,
   resolveCurrentModel,
@@ -23,8 +24,16 @@ const catalog = {
 describe('flattenCatalog', () => {
   it('groups × models → 下拉选项', () => {
     expect(flattenCatalog(catalog)).toEqual([
-      { provider: 'deepseek-official', model: 'deepseek-v4-flash', label: 'deepseek-official · deepseek-v4-flash' },
-      { provider: 'deepseek-official', model: 'deepseek-v4-pro', label: 'deepseek-official · deepseek-v4-pro' },
+      {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+        label: 'deepseek-official · deepseek-v4-flash',
+      },
+      {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-pro',
+        label: 'deepseek-official · deepseek-v4-pro',
+      },
     ])
   })
   it('空 groups → 空数组', () => {
@@ -34,15 +43,22 @@ describe('flattenCatalog', () => {
 
 describe('resolveCurrentModel', () => {
   it('next 优先，其次 lastUsed，最后 catalog.default', () => {
-    expect(resolveCurrentModel(catalog, { next: { provider: 'n', model: 'm' }, lastUsed: { provider: 'l', model: 'u' } }))
-      .toEqual({ provider: 'n', model: 'm' })
-    expect(resolveCurrentModel(catalog, { lastUsed: { provider: 'l', model: 'u' } }))
-      .toEqual({ provider: 'l', model: 'u' })
+    expect(
+      resolveCurrentModel(catalog, {
+        next: { provider: 'n', model: 'm' },
+        lastUsed: { provider: 'l', model: 'u' },
+      }),
+    ).toEqual({ provider: 'n', model: 'm' })
+    expect(resolveCurrentModel(catalog, { lastUsed: { provider: 'l', model: 'u' } })).toEqual({
+      provider: 'l',
+      model: 'u',
+    })
     expect(resolveCurrentModel(catalog, undefined)).toEqual(catalog.default)
   })
   it('宿主投影为 null 时回退 lastUsed / catalog.default', () => {
-    expect(resolveCurrentModel(catalog, { next: null, lastUsed: { provider: 'l', model: 'u' } }))
-      .toEqual({ provider: 'l', model: 'u' })
+    expect(
+      resolveCurrentModel(catalog, { next: null, lastUsed: { provider: 'l', model: 'u' } }),
+    ).toEqual({ provider: 'l', model: 'u' })
     expect(resolveCurrentModel(catalog, { next: null, lastUsed: null })).toEqual(catalog.default)
   })
 })
@@ -59,6 +75,33 @@ describe('parseCardArgs', () => {
     expect(parseCardArgs({ planDir: '.pae/s1' })).toBeUndefined()
     expect(parseCardArgs({ planDir: '.pae/s1', steps: [{ title: 'A' }] })).toBeUndefined()
     expect(parseCardArgs(null)).toBeUndefined()
+  })
+})
+
+describe('degradedCardArgs', () => {
+  it('缺 planDir 但 steps 合法 → 降级解析（planDir 空串 + 步骤保留）', () => {
+    expect(
+      degradedCardArgs({
+        summary: '旧计划',
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B', requiresConfirmation: true },
+        ],
+      }),
+    ).toEqual({
+      planDir: '',
+      summary: '旧计划',
+      steps: [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B', requiresConfirmation: true },
+      ],
+    })
+  })
+  it('steps 缺失 / 空数组 / 步骤缺 file / 非对象 → undefined', () => {
+    expect(degradedCardArgs({})).toBeUndefined()
+    expect(degradedCardArgs({ steps: [] })).toBeUndefined()
+    expect(degradedCardArgs({ steps: [{ title: 'A' }] })).toBeUndefined()
+    expect(degradedCardArgs(null)).toBeUndefined()
   })
 })
 

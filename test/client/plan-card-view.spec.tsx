@@ -173,4 +173,16 @@ describe('SubmitPlanCardView', () => {
     expect(screen.queryByRole('button', { name: 'openDir' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'openFile' })).toBeNull()
   })
+
+  it('旧会话载荷缺 planDir → 降级渲染步骤列表（无打开按钮）', async () => {
+    const noPlanDir = { summary: '旧计划', steps: planArgs.steps }
+    render(<SubmitPlanCardView {...makeProps({ block: runningBlock(noPlanDir) })} />)
+    await screen.findByText(/步骤 A/)
+    expect(screen.getByText(/步骤 B/)).toBeTruthy()
+    expect(screen.getByText('a.md')).toBeTruthy()
+    expect(screen.getAllByRole('combobox')).toHaveLength(2)
+    // 缺 planDir → 打开路径不可用：目录区与打开按钮都不渲染
+    expect(screen.queryByRole('button', { name: 'openDir' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'openFile' })).toBeNull()
+  })
 })

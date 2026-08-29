@@ -86,4 +86,20 @@ describe('PlanCard', () => {
       (screen.getByRole('button', { name: 'applyModels' }) as HTMLButtonElement).disabled,
     ).toBe(true)
   })
+
+  it('apply 失败（onSubmit reject）→ 按钮下方显示错误文本，不置 applied', async () => {
+    const onSubmit = vi.fn(async () => {
+      throw new Error('prompt 被拒')
+    })
+    render(<PlanCard {...base} onSubmit={onSubmit} />)
+    fireEvent.change(screen.getAllByRole('combobox')[0]!, {
+      target: { value: 'deepseek-official|deepseek-v4-pro' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'applyModels' }))
+    await screen.findByText('应用失败：prompt 被拒')
+    expect(onSubmit).toHaveBeenCalled()
+    // 不置 applied：按钮仍显示「应用模型选择」
+    expect(screen.getByRole('button', { name: 'applyModels' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'applied' })).toBeNull()
+  })
 })

@@ -20,6 +20,7 @@ import type { NS } from './locale.ts'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import {
   buildSetModelsPrompt,
+  degradedCardArgs,
   flattenCatalog,
   parseCardArgs,
   resolveCurrentModel,
@@ -61,32 +62,44 @@ export function PlanCard({
   const defaultValue = optionKey(current)
   const [selection, setSelection] = useState<Record<number, string>>({})
   const [applied, setApplied] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  // 缺 planDir（旧会话降级载荷）→ 打开路径不可用：目录区与打开按钮都不渲染
+  const openable = canOpen && args.planDir !== ''
   const dirty = args.steps.some(
     (_step, index) => (selection[index + 1] ?? defaultValue) !== defaultValue,
   )
 
   const apply = async (): Promise<void> => {
-    await onSubmit(
-      serializeStepModels({ ...defaultSelection(args.steps.length, defaultValue), ...selection }),
-    )
-    setApplied(true)
+    try {
+      await onSubmit(
+        serializeStepModels({ ...defaultSelection(args.steps.length, defaultValue), ...selection }),
+      )
+      setApplied(true)
+      setError(undefined)
+    } catch (err) {
+      // 提交失败（如 session.prompt 拒绝）：行内报错，不置 applied
+      setApplied(false)
+      setError(`应用失败：${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   return (
     <div data-testid="pae-plan-card">
-      <div>
-        <strong>
-          {t('planDir')}：{args.planDir}
-        </strong>
-        {canOpen ? (
-          <button type="button" aria-label={t('openDir')} onClick={() => openFile(args.planDir)}>
-            {t('openDir')}
-          </button>
-        ) : (
-          <span>{args.planDir}</span>
-        )}
-        {args.summary !== undefined ? <p>{args.summary}</p> : null}
-      </div>
+      {args.planDir !== '' ? (
+        <div>
+          <strong>
+            {t('planDir')}：{args.planDir}
+          </strong>
+          {canOpen ? (
+            <button type="button" aria-label={t('openDir')} onClick={() => openFile(args.planDir)}>
+              {t('openDir')}
+            </button>
+          ) : (
+            <span>{args.planDir}</span>
+          )}
+          {args.summary !== undefined ? <p>{args.summary}</p> : null}
+        </div>
+      ) : null}
       <ol>
         {args.steps.map((step, index) => {
           const i = index + 1
@@ -98,7 +111,7 @@ export function PlanCard({
                 {step.requiresConfirmation === true ? ' ⚠' : ''}
               </span>{' '}
               <code>{step.file}</code>{' '}
-              {canOpen ? (
+              {openable ? (
                 <button
                   type="button"
                   aria-label={t('openFile')}
@@ -113,6 +126,7 @@ export function PlanCard({
                 onChange={(event) => {
                   setSelection((prev) => ({ ...prev, [i]: event.target.value }))
                   setApplied(false)
+                  setError(undefined)
                 }}
               >
                 {options.map((option) => (
@@ -133,6 +147,7 @@ export function PlanCard({
       >
         {applied ? t('applied') : t('applyModels')}
       </button>
+      {error !== undefined ? <p data-testid="pae-apply-error">{error}</p> : null}
     </div>
   )
 }
@@ -168,12 +183,15 @@ export type SubmitPlanCardViewProps = ToolCallViewProps &
 function parseBlockArgs(block: ToolCallViewProps['block']): CardArgs | undefined {
   const raw = 'kind' in block ? (block.call?.argsRaw ?? '') : block.argsRaw
   if (raw === '') return undefined
+  let parsed: unknown
   try {
-    return parseCardArgs(JSON.parse(raw) as unknown)
+    parsed = JSON.parse(raw)
   } catch {
     // 流式可见截断的 JSON 前缀：按不可解析处理（SkillRow 同款容错）
     return undefined
   }
+  // 旧会话载荷缺 planDir：降级为仅步骤列表（打开路径不可用，见 PlanCard 的 planDir 空串门控）
+  return parseCardArgs(parsed) ?? degradedCardArgs(parsed)
 }
 
 /**
