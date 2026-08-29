@@ -22,7 +22,7 @@
 | D2 | 打开路径用 `openFile`（owner props 自带），目录即 `openFile(目录路径)` | `client/ui-tool/.../contract/slots.ts:29-44`；`api/session-controller/src/index.ts:269-297`；`util/native-command/path-opener.ts:182`（macOS open / Linux xdg-open / Win Invoke-Item） |
 | D3 | 打开按钮门控 `isLoopback && canOpenWorkspacePath()`，否则显示路径文本 | `client/ui-deliverables/.../ProducedFiles.tsx:71-73` 范式 |
 | D4 | 每步执行切换用 `agent/request` waterfall，**不用** `selectModel` | `selectModel` 会顺带改写全局默认模型（`api/session-controller/src/commands.ts:138` `agentDefaultModel.saveSelection`），且仅 web-app bundle 挂载 |
-| D5 | waterfall 在 `agent.ctx` 注册（agent 作用域），后注册者最后覆盖；无 step 模型时透传 | `core/agent/src/model-selection.ts:39-75`（installModelSelection 同机制）；`core/agent-loop/src/agent.ts:476-479` |
+| D5 | waterfall 在 `agent.ctx` 注册（agent 作用域），后注册者最后覆盖；无 step 模型时透传；有映射时先剥离继承的 `reasoningEffort` 再按选择重加（与 installModelSelection 同一语义，防止会话模型 effort 泄漏到不支持它的映射模型） | `core/agent/src/model-selection.ts:39-75`（installModelSelection 同机制）；`core/agent-loop/src/agent.ts:476-479` |
 | D6 | `session.prompt` 只回 `{accepted:true}` ack，不回命令结果 → 卡片无法查询已持久化选择；选择驻留浏览器 state，apply 后刷新重置为当前会话模型（已知限制） | `api/session-controller/src/types.ts:317-329` |
 | D7 | apply 允许在 planning/paused/executing 阶段（不锁 planning），避免审批期间 prompt 排队导致的竞态；waterfall 对当前步即时生效 | 竞态分析：卡片出现在 submit_plan 调用即审批挂起时，queue 处理顺序不可控 |
 | D8 | `planDir` 由 submit_plan 参数携带（指令中给的是绝对路径，原样传回，宿主归一化校验）——客户端读不到插件配置值，且 prompt ack-only 无法查询 | `src/prompts.ts:54-60`（kickoff 给出 `${planDir}/`） |
@@ -608,8 +608,12 @@ pnpm test -- test/index.spec.ts
         const stepIndex = orchestrator.snapshot().stepIndex ?? 0
         const selected = orchestrator.stepModelFor(stepIndex)
         if (selected === undefined) return resolved
+        // 与宿主 installModelSelection 同一语义：先剥离 seed 继承的 reasoningEffort，
+        // 再按选择重加（否则会话模型带 effort 而映射模型不带时，effort 泄漏到映射模型，
+        // 不支持的组合会在 prepareCall 抛 UNSUPPORTED_REASONING_EFFORT）。
+        const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved
         return {
-          ...resolved,
+          ...withoutInheritedEffort,
           provider: selected.provider,
           model: selected.model,
           ...(selected.reasoningEffort === undefined
@@ -1209,4 +1213,4 @@ git commit -m "feat: submit_plan toolview 卡片（打开文件/目录 + 每步�
 
 **3. 类型一致性**：`PaeStepModel`（state.ts）与 `serializeStepModels` 载荷 `{provider, model}`（后者为命令载荷子集，命令侧补 `reasoningEffort` 可选字段）；`submitPlan(planDir, steps, summary?)` 签名在 orchestrator/tools/helpers 三处同步；`restoreState` 返回值三字段扩为四字段在 orchestrator.applyPersisted 一处解构同步。
 
-**已知限制（验收时确认可接受）**：① 页面刷新后卡片下拉重置为当前会话模型（prompt 只回 ack，无法读回已持久化选择，D6）；② `/plan-and-execute-set-models {json}` 会作为一条用户消息出现在会话历史；③ 远端部署（非 loopback）无打开按钮，只显示路径文本（D3）。
+**已知限制（验收时确认可接受）**：① 页面刷新后卡片下拉重置为当前会话模型（prompt 只回 ack，无法读回已持久化选择，D6）；已应用的选择会持续生效直至重新应用或新编排（刷新页面只重置下拉显示，不重置已生效的映射）；② `/plan-and-execute-set-models {json}` 会作为一条用户消息出现在会话历史；③ 远端部署（非 loopback）无打开按钮，只显示路径文本（D3）。
