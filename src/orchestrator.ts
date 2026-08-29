@@ -8,7 +8,8 @@
  * （turn/*、todo/write）。
  * @module plan-and-execute/orchestrator
  */
-import type { SessionEvent, TodoItem, UserMessage } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import { classifyOutcome, decideAction, type FailurePolicy, type StepOutcome } from './decision.ts'
 import { validateManifest } from './manifest.ts'

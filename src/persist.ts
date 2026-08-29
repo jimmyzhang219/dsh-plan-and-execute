@@ -6,7 +6,7 @@
  */
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { TodoItem } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { PaePausedReason, PaePhase, PaePlanPayload, PaeStepReportPayload } from './state.ts'
 
 /** JSON 安全的编排状态快照（Map/Set 已转 Record/数组）。 */

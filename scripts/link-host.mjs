@@ -25,6 +25,10 @@ const HOST_PACKAGES = {
   '@deepseek-ai/dsh-tool-todo': 'packages/todo/tool-todo',
   '@deepseek-ai/dsh-tools': 'packages/core/tools',
   '@deepseek-ai/dsh-user-questions': 'packages/interaction/user-questions',
+  '@deepseek-ai/dsh-client-connection': 'packages/client/connection',
+  '@deepseek-ai/dsh-client-ui-slots': 'packages/client/ui-slots',
+  '@deepseek-ai/dsh-client-ui-tool': 'packages/client/ui-tool',
+  '@deepseek-ai/dsh-api-remotes': 'packages/api/remotes',
 }
 
 const remove = process.argv.includes('--remove')

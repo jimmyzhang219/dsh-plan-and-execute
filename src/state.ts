@@ -7,7 +7,8 @@
  * （todo/write、turn/* 等）。
  * @module plan-and-execute/state
  */
-import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 
 /** 插件标识（消息 source.plugin、编排目录命名空间）。 */
 export const PAE_PLUGIN = 'plan-and-execute'

@@ -12,6 +12,10 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client/index.d.cts",
+      "default": "./lib/client/index.cjs"
     }
   },
   "files": [
@@ -33,6 +37,16 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots",
+        "locale",
+        "remote",
+        "remote.session",
+        "connection"
+      ]
     }
   },
   "peerDependencies": {
@@ -46,7 +60,11 @@
     "@deepseek-ai/dsh-system-prompt": "*",
     "@deepseek-ai/dsh-tool-todo": "*",
     "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/dsh-user-questions": "*"
+    "@deepseek-ai/dsh-user-questions": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
+    "@deepseek-ai/dsh-client-ui-slots": "*",
+    "@deepseek-ai/dsh-client-ui-tool": "*",
+    "@deepseek-ai/dsh-api-remotes": "*"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
@@ -58,6 +76,9 @@
     "tsup": "^8.0.0",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@types/react": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "@testing-library/react": "^16.0.0"
   }
 }
