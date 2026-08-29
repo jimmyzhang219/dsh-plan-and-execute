@@ -38,6 +38,7 @@ import {
   type PlanStep,
 } from './state.ts'
 
+/** 窄化后的会话面：事件日志 + todo 整表写入（真实 Session 的适配在 src/index.ts）。 */
 export interface DriveSession {
   /** 标准事件日志（仅宿主白名单事件；pae/* 不在此）。 */
   readonly events: readonly SessionEvent[]
@@ -45,14 +46,20 @@ export interface DriveSession {
   writeTodos(todos: readonly TodoItem[]): void
 }
 
+/** 窄化后的 Agent 驱动面：注入消息 + 等待回合空闲（settle 依赖）。 */
 export interface DriveAgent {
+  /** 会话面（事件日志 + todo 写入）。 */
   readonly session: DriveSession
+  /** 注入一条消息（user role；插件编排指令）。 */
   steer(message: UserMessage): void
+  /** 等待当前回合结束（超时/中断由宿主侧决定）。 */
   whenIdle(): Promise<void>
 }
 
+/** 用户交互通道：弹窗询问并返回答案（实现见 index.ts 的 askFor）。 */
 export type AskFn = (questions: AskUserQuestionItem[]) => Promise<AskUserQuestionAnswer>
 
+/** 解析后的编排配置：失败策略 + 计划根目录。 */
 export interface ResolvedConfig extends FailurePolicy {
   /** 相对会话 cwd 的计划根目录（配置值）。 */
   readonly planRoot: string
@@ -66,39 +73,69 @@ export interface OrchestratorHooks {
   onRestore?(): void
 }
 
+/** 审批弹窗「批准」选项标签。 */
 export const APPROVE_LABEL = '批准'
+/** 审批弹窗「继续修改」选项标签。 */
 export const KEEP_LABEL = '继续修改'
+/** 暂停弹窗「重试该步」选项标签。 */
 export const PAUSE_RETRY = '重试该步'
+/** 暂停弹窗「跳过该步」选项标签。 */
 export const PAUSE_SKIP = '跳过该步'
+/** 暂停弹窗「继续下一步」选项标签。 */
 export const PAUSE_NEXT = '继续下一步'
+/** 暂停弹窗「回到计划阶段」选项标签。 */
 export const PAUSE_REPLAN = '回到计划阶段'
+/** 暂停/确认点弹窗「终止」选项标签。 */
 export const PAUSE_TERMINATE = '终止'
+/** 确认点弹窗「继续」选项标签。 */
 export const CONFIRM_CONTINUE = '继续'
+/** 完成通知「知道了」选项标签。 */
 export const DONE_ACK = '知道了'
 
+/** 暂停弹窗的选项选择结果（'dismissed'=弹窗被关闭，保持暂停态）。 */
 type PauseChoice = 'retry' | 'skip' | 'next' | 'replan' | 'terminate' | 'dismissed'
 
+/** 编排器运行时内存态（与持久化快照的差异：Map/Set 集合、'none' 未开始初态）。 */
 interface RuntimeState {
+  /** 当前阶段；'none' 表示尚未开始。 */
   phase: PaePhase | 'none'
+  /** 任务文本（用户输入）。 */
   task?: string
+  /** 计划目录。 */
   planDir?: string
+  /** 当前步骤号（1-based）。 */
   stepIndex?: number
+  /** 暂停原因。 */
   pausedReason?: PaePausedReason
+  /** 已批准的计划。 */
   plan?: PaePlanPayload
+  /** 各步汇报（键为 1-based 步号）。 */
   stepReports: Map<number, PaeStepReportPayload>
+  /** 各步 todo 状态（键为 1-based 步号）。 */
   statuses: Map<number, TodoItem['status']>
+  /** 被跳过（skip）的步骤号集合。 */
   skipped: Set<number>
 }
 
+/**
+ * plan-and-execute 编排器：状态机 + 步进驱动循环。
+ * 只依赖窄结构依赖（DriveAgent/DriveSession/AskFn/PersistedStorage），
+ * 全部可离线单测；真实 Agent 的适配在 src/index.ts 的 toDriveAgent。
+ */
 export class Orchestrator {
+  /** 已释放标记：置位后所有循环/恢复路径立即退出。 */
   private disposed = false
+  /** 当前审批门闩（afterApproval 挂起，等待计划批准后启动执行循环）。 */
   private approval: PromiseWithResolvers<PaePlanPayload> | undefined
+  /** 最近一次暂停/驳回的反馈 free-text（进入 replan 时回给模型）。 */
   private lastFeedback = ''
   /** report 注入水位线：注入指令时记下，settle 时据此判定"本回合新增的 report"。 */
   private reportSeq = 0
+  /** 最近一次指令注入时的 reportSeq 快照（settle 判定新汇报的基线）。 */
   private reportWatermark = 0
   /** 步骤指令注入次数（含 retry 重注入）：单调递增，测试/审计用于区分同一步的多次尝试。 */
   private stepAttempt = 0
+  /** 编排运行时状态（唯一事实源；save 时按 snapshotState 持久化）。 */
   private readonly state: RuntimeState = {
     phase: 'none',
     stepReports: new Map(),
@@ -106,6 +143,14 @@ export class Orchestrator {
     skipped: new Set(),
   }
 
+  /**
+   * @param deps.agent - 窄化后的 Agent 驱动面（steer/whenIdle/会话事件日志）。
+   * @param deps.ask - 用户交互通道（审批/暂停弹窗询问）。
+   * @param deps.config - 解析后的失败策略配置。
+   * @param deps.planDir - 本会话计划目录（已含 sessionId 后缀）。
+   * @param deps.storage - 编排状态持久化（planDir/orchestrator.json）。
+   * @param deps.hooks - 激活/结束钩子（工具可见性控制）。
+   */
   constructor(
     private readonly deps: {
       agent: DriveAgent
@@ -117,10 +162,12 @@ export class Orchestrator {
     },
   ) {}
 
+  /** 窄化会话面（事件日志 + todo 整表写入）。 */
   private get session(): DriveSession {
     return this.deps.agent.session
   }
 
+  /** 折叠当前内存态为只读快照（同步读用）。 */
   private folded(): {
     phase: PaePhase | 'none'
     task?: string
@@ -173,11 +220,13 @@ export class Orchestrator {
     this.armApproval()
   }
 
+  /** 建立审批门闩并挂起 afterApproval（计划批准后自动进入执行循环）。 */
   private armApproval(): void {
     this.approval = Promise.withResolvers<PaePlanPayload>()
     void this.afterApproval()
   }
 
+  /** 审批等待协程：计划批准 → run(plan, 1)；异常或释放 → 置终止态。 */
   private async afterApproval(): Promise<void> {
     const gate = this.approval
     if (gate === undefined) return
@@ -293,6 +342,7 @@ export class Orchestrator {
     return classifyOutcome(turnEndKind, freshReport)
   }
 
+  /** 更新某步 todo 状态并整表重写（statuses 单点修改入口）。 */
   private mark(stepIndex: number, status: TodoItem['status'], plan: PaePlanPayload): void {
     this.state.statuses.set(stepIndex, status)
     this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
@@ -436,6 +486,7 @@ export class Orchestrator {
     return 'dismissed'
   }
 
+  /** 回到规划阶段：清计划、注入 replan 指令（携带最近反馈）、重新挂起审批。 */
   private async enterReplan(plan: PaePlanPayload, _feedback: string): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
@@ -580,6 +631,7 @@ export class Orchestrator {
     this.reportWatermark = this.reportSeq
   }
 
+  /** 收尾：恢复工具可见性、置终态、写 todo（completed 时弹完成通知）。 */
   private async finish(phase: 'completed' | 'aborted', plan: PaePlanPayload): Promise<void> {
     this.deps.hooks?.onRestore?.()
     this.state.phase = phase
@@ -615,6 +667,7 @@ export class Orchestrator {
     }
   }
 
+  /** 释放编排器（停止一切循环与恢复；幂等）。 */
   dispose(): void {
     this.disposed = true
   }

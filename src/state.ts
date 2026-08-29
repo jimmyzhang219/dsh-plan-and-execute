@@ -9,27 +9,41 @@
  */
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 
+/** 插件标识（消息 source.plugin、编排目录命名空间）。 */
 export const PAE_PLUGIN = 'plan-and-execute'
 
+/** 编排阶段：planning（规划）→ executing（执行，可暂停）→ completed/aborted（终态）。 */
 export type PaePhase = 'planning' | 'executing' | 'paused' | 'completed' | 'aborted'
+/** 暂停原因：确认点等待用户 / 步骤失败 / 用户终止。 */
 export type PaePausedReason = 'confirm-point' | 'failure' | 'cancelled'
 
 /** manifest 的单步描述（控制流；内容在步骤 md 文件里）。 */
 export interface PlanStep {
+  /** 步骤 Markdown 文件名（相对 planDir；manifest 校验路径安全）。 */
   readonly file: string
+  /** 步骤短标题。 */
   readonly title: string
+  /** 风险步骤标记：执行前需用户确认。 */
   readonly requiresConfirmation?: boolean
 }
 
+/** submit_plan 提交的计划载荷（批准后即执行清单）。 */
 export interface PaePlanPayload {
+  /** 计划目录：步骤 Markdown 文件所在（相对会话 cwd）。 */
   readonly planDir: string
+  /** 计划一句话概述（可缺省）。 */
   readonly summary?: string
+  /** 步骤清单；数组顺序即执行顺序。 */
   readonly steps: readonly PlanStep[]
 }
 
+/** report_step 的单步汇报载荷（内存态；不写会话日志）。 */
 export interface PaeStepReportPayload {
+  /** 汇报的步骤号（1-based）。 */
   readonly stepIndex: number
+  /** 结局：done=已完成本步；blocked=无法完成。 */
   readonly outcome: 'done' | 'blocked'
+  /** 一两句结果/原因说明。 */
   readonly summary: string
 }
 

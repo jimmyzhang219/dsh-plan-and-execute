@@ -11,6 +11,7 @@ import {
   type PlanStep,
 } from './state.ts'
 
+/** 构造插件注入消息：source.kind='plugin'（不参与 dsh 用户消息语义，如自动标题派生）。 */
 function instruction(text: string, summary: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
@@ -18,6 +19,7 @@ function instruction(text: string, summary: string): UserMessage {
   })
 }
 
+/** 规划阶段 system-prompt 段落正文（步骤文件规范 + submit_plan 纪律）。 */
 export function PLANNING_SECTION_BODY(planDir: string): string {
   return [
     '## Plan-and-Execute：规划阶段',
@@ -34,6 +36,7 @@ export function PLANNING_SECTION_BODY(planDir: string): string {
   ].join('\n')
 }
 
+/** 执行阶段 system-prompt 段落正文（每步一指令 + report_step 纪律）。 */
 export function EXECUTING_SECTION_BODY(): string {
   return [
     '## Plan-and-Execute：执行阶段',
@@ -47,6 +50,7 @@ export function EXECUTING_SECTION_BODY(): string {
   ].join('\n')
 }
 
+/** 编排启动注入消息（规划阶段 kickoff，含任务文本）。 */
 export function kickoffInstruction(task: string, planDir: string): UserMessage {
   return instruction(
     [
@@ -57,6 +61,7 @@ export function kickoffInstruction(task: string, planDir: string): UserMessage {
   )
 }
 
+/** 执行某步的注入消息（先读步骤文件再动手 + 强制 report_step）。 */
 export function stepInstruction(
   index: number,
   total: number,
@@ -73,6 +78,7 @@ export function stepInstruction(
   )
 }
 
+/** 缺报提示注入消息（要求立即 report_step）。 */
 export function nudgeInstruction(): UserMessage {
   return instruction(
     '本步尚未汇报结果。请立即调用 report_step（outcome=done 或 blocked，summary 必填）汇报当前步骤的结局。',
@@ -80,6 +86,7 @@ export function nudgeInstruction(): UserMessage {
   )
 }
 
+/** 自愈重试注入消息（按诊断调整做法重试当前步）。 */
 export function recoverInstruction(diagnostic: string): UserMessage {
   return instruction(
     [
@@ -90,6 +97,7 @@ export function recoverInstruction(diagnostic: string): UserMessage {
   )
 }
 
+/** 回到规划阶段的注入消息（携带用户驳回反馈）。 */
 export function replanInstruction(feedback: string, previousSteps: number): UserMessage {
   return instruction(
     [
@@ -100,6 +108,7 @@ export function replanInstruction(feedback: string, previousSteps: number): User
   )
 }
 
+/** 恢复规划阶段的注入消息（续写步骤文件并重新提交）。 */
 export function resumePlanningInstruction(): UserMessage {
   return instruction(
     '编排恢复：继续完成规划阶段的调研与步骤文件编写，完成后调用 submit_plan 提交审批。',
@@ -107,6 +116,7 @@ export function resumePlanningInstruction(): UserMessage {
   )
 }
 
+/** 审批弹窗的计划清单详情文本（步骤号 + 标题 + 文件 + 确认点标记）。 */
 export function planReviewDetail(steps: readonly PlanStep[], planDir: string): string {
   const lines = steps.map((step, index) => {
     const mark = step.requiresConfirmation === true ? ' ⚠ 确认点' : ''
@@ -115,6 +125,7 @@ export function planReviewDetail(steps: readonly PlanStep[], planDir: string): s
   return [`计划目录：${planDir}`, ...lines].join('\n')
 }
 
+/** 完成通知的逐步结局详情文本（done/blocked/skipped + 汇报摘要）。 */
 export function completionDetail(
   steps: readonly PlanStep[],
   reports: ReadonlyMap<number, PaeStepReportPayload>,
@@ -129,6 +140,7 @@ export function completionDetail(
   return lines.join('\n')
 }
 
+/** 计划的一句话摘要（缺省时退化为"共 N 步"）。 */
 export function planSummaryLine(plan: PaePlanPayload): string {
   return plan.summary ?? `共 ${plan.steps.length} 步`
 }

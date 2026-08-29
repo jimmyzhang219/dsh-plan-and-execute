@@ -11,17 +11,27 @@ import type { PaePausedReason, PaePhase, PaePlanPayload, PaeStepReportPayload } 
 
 /** JSON 安全的编排状态快照（Map/Set 已转 Record/数组）。 */
 export interface PersistedOrchestratorState {
+  /** 编排阶段（终态 completed/aborted 也持久化，供恢复判定）。 */
   readonly phase: PaePhase
+  /** 编排任务文本（用户输入）。 */
   readonly task?: string
+  /** 计划目录。 */
   readonly planDir?: string
+  /** 当前步骤号（1-based；planning 阶段为 undefined）。 */
   readonly stepIndex?: number
+  /** 暂停原因（paused 阶段）。 */
   readonly pausedReason?: PaePausedReason
+  /** 已批准的计划（executing/paused 阶段）。 */
   readonly plan?: PaePlanPayload
+  /** 各步汇报记录（按 stepIndex 去重，数组序）。 */
   readonly stepReports: readonly PaeStepReportPayload[]
+  /** 各步 todo 状态（键为 1-based 步号）。 */
   readonly statuses: Readonly<Record<number, TodoItem['status']>>
+  /** 被跳过（skip）的步骤号集合。 */
   readonly skipped: readonly number[]
 }
 
+/** 状态文件名（位于 planDir 下）。 */
 export const STATE_FILE = 'orchestrator.json'
 
 /** 读编排状态；无状态文件返回 undefined（宽松解析，坏文件视为无状态）。 */

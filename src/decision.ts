@@ -4,6 +4,7 @@
  */
 import type { PaePausedReason, PaeStepReportPayload } from './state.ts'
 
+/** 单步结局分类：模型自报（done/blocked）、turn 终止（failed/aborted）、本回合缺报（missing-report）。 */
 export type StepOutcome = 'done' | 'blocked' | 'failed' | 'aborted' | 'missing-report'
 
 /**
@@ -23,17 +24,27 @@ export function classifyOutcome(
   return 'missing-report'
 }
 
+/** 决策输出动作：advance=推进下一步；nudge=提示补报；recover=自愈重试；pause=暂停（附原因）。 */
 export type StepAction =
   | { kind: 'advance' }
   | { kind: 'nudge' }
   | { kind: 'recover' }
   | { kind: 'pause'; reason: Extract<PaePausedReason, 'failure' | 'cancelled'> }
 
+/** 步骤失败策略（来自插件配置）。 */
 export interface FailurePolicy {
+  /** 失败处置：'pause'=暂停问人；'auto-recover'=自动重试。 */
   readonly onStepFailure: 'pause' | 'auto-recover'
+  /** auto-recover 模式下单步自愈次数上限。 */
   readonly maxAutoRecoveries: number
 }
 
+/**
+ * 由本步结局与重试上下文决策下一步动作。
+ * @param outcome - 本步结局分类（classifyOutcome 的输出）。
+ * @param context - nudged：本步是否已提示过补报；recoveries：本步已自愈次数；policy：失败策略。
+ * @returns 决策动作（advance/nudge/recover/pause）。
+ */
 export function decideAction(
   outcome: StepOutcome,
   context: {
@@ -55,6 +66,7 @@ export function decideAction(
   }
 }
 
+/** 失败（blocked/failed）或已提示仍缺报的统一处置：未达自愈上限则 recover，否则 pause。 */
 function failureAction(context: { recoveries: number; policy: FailurePolicy }): StepAction {
   const { onStepFailure, maxAutoRecoveries } = context.policy
   if (onStepFailure === 'auto-recover' && context.recoveries < maxAutoRecoveries) {

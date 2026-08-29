@@ -5,8 +5,14 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Orchestrator } from './orchestrator.ts'
 
+/** 按会话对象定位编排器的查表函数（无编排返回 undefined）。 */
 export type OrchestratorLookup = (session: object) => Orchestrator | undefined
 
+/**
+ * 构造 submit_plan 工具：规划阶段提交步骤清单供用户审批。
+ * @param lookup - 会话 → 编排器查表（定位当前会话的编排器）。
+ * @returns dsh 工具定义（已注册名称 submit_plan）。
+ */
 export function createSubmitPlanTool(lookup: OrchestratorLookup) {
   return defineTool({
     name: 'submit_plan',
@@ -77,6 +83,11 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
   })
 }
 
+/**
+ * 构造 report_step 工具：执行阶段汇报当前步骤结局。
+ * @param lookup - 会话 → 编排器查表（定位当前会话的编排器）。
+ * @returns dsh 工具定义（已注册名称 report_step）。
+ */
 export function createReportStepTool(lookup: OrchestratorLookup) {
   return defineTool({
     name: 'report_step',
