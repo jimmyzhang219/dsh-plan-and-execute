@@ -29,7 +29,7 @@ export function isPlanReviewPending(value: unknown): value is PlanReviewPendingL
 }
 
 /** 审批卡决策面（首个问题的 id/标题/选项/详情文本）。 */
-export interface ReviewView {
+interface ReviewView {
   readonly id: string
   readonly question: string
   readonly options: ReadonlyArray<{ readonly label: string; readonly description?: string }>

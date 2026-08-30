@@ -40,10 +40,10 @@ export interface PersistedOrchestratorState {
 }
 
 /** 状态文件名（位于 planDir 下）。 */
-export const STATE_FILE = 'orchestrator.json'
+const STATE_FILE = 'orchestrator.json'
 
 /** 读编排状态；无状态文件返回 undefined（宽松解析，坏文件视为无状态）。 */
-export async function readState(planDir: string): Promise<PersistedOrchestratorState | undefined> {
+async function readState(planDir: string): Promise<PersistedOrchestratorState | undefined> {
   try {
     const raw = await readFile(join(planDir, STATE_FILE), 'utf8')
     const parsed = JSON.parse(raw) as PersistedOrchestratorState
@@ -57,7 +57,7 @@ export async function readState(planDir: string): Promise<PersistedOrchestratorS
 }
 
 /** 原子写状态快照（同目录临时文件 + rename）。 */
-export async function writeState(
+async function writeState(
   planDir: string,
   state: PersistedOrchestratorState,
 ): Promise<void> {

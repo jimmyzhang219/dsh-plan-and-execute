@@ -28,7 +28,7 @@ import {
 import type { NS } from './locale.ts'
 
 /** 决策答案形状（与宿主 AskUserQuestionAnswer 一致的最小面）。 */
-export interface AnswerLike {
+interface AnswerLike {
   answers: ReadonlyArray<{
     readonly id: string
     readonly selected: readonly string[]
@@ -226,13 +226,13 @@ export function PaeReviewCard({
  * session 远端面的最小契约：审批卡只消费这三个方法，
  * 注册入口传入真实 ClientRemote['session']（Pick 即真实签名，结构赋值零 as）。
  */
-export type ReviewSessionRemoteLike = Pick<
+type ReviewSessionRemoteLike = Pick<
   ClientRemote['session'],
   'modelCatalog' | 'canOpenWorkspacePath' | 'openWorkspacePath'
 >
 
 /** settings 远端面：静默写模型选择（Pick 即真实签名）。 */
-export type ReviewSettingsRemoteLike = Pick<ClientRemote['settings'], 'update'>
+type ReviewSettingsRemoteLike = Pick<ClientRemote['settings'], 'update'>
 
 /** 审批卡注入面（注册入口 inject 工厂返回）。 */
 export interface PaeReviewCardInjected {
@@ -242,7 +242,7 @@ export interface PaeReviewCardInjected {
 }
 
 /** conversation.composer 注册入口的完整组件 props（owner + locale + 注入面）。 */
-export type PaeReviewCardViewProps = PaeReviewCardInjected &
+type PaeReviewCardViewProps = PaeReviewCardInjected &
   PropsLocale<typeof NS> & {
     /** 会话标识（composer owner props；与宿主 agent.id 同源，缺失时回退 pending.sessionId）。 */
     readonly sessionId: string | undefined

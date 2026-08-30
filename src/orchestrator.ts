@@ -59,16 +59,16 @@ export interface DriveAgent {
 }
 
 /** 用户交互通道：弹窗询问并返回答案（实现见 index.ts 的 askFor）。 */
-export type AskFn = (questions: AskUserQuestionItem[]) => Promise<AskUserQuestionAnswer>
+type AskFn = (questions: AskUserQuestionItem[]) => Promise<AskUserQuestionAnswer>
 
 /** 解析后的编排配置：失败策略 + 计划根目录。 */
-export interface ResolvedConfig extends FailurePolicy {
+interface ResolvedConfig extends FailurePolicy {
   /** 相对会话 cwd 的计划根目录（配置值）。 */
   readonly planRoot: string
 }
 
 /** 编排激活/结束钩子：装配层借此挂接工具可见性控制（如 deny exit_plan_mode）。 */
-export interface OrchestratorHooks {
+interface OrchestratorHooks {
   /** 编排激活（begin 或 revive）时调用；可重复调用（幂等）。 */
   onActivate?(): void
   /** 编排结束（completed/aborted）时调用。 */
@@ -76,21 +76,21 @@ export interface OrchestratorHooks {
 }
 
 /** 审批弹窗「批准」选项标签。 */
-export const APPROVE_LABEL = '批准'
+const APPROVE_LABEL = '批准'
 /** 审批弹窗「继续修改」选项标签。 */
-export const KEEP_LABEL = '继续修改'
+const KEEP_LABEL = '继续修改'
 /** 暂停弹窗「重试该步」选项标签。 */
-export const PAUSE_RETRY = '重试该步'
+const PAUSE_RETRY = '重试该步'
 /** 暂停弹窗「跳过该步」选项标签。 */
-export const PAUSE_SKIP = '跳过该步'
+const PAUSE_SKIP = '跳过该步'
 /** 暂停弹窗「继续下一步」选项标签。 */
-export const PAUSE_NEXT = '继续下一步'
+const PAUSE_NEXT = '继续下一步'
 /** 暂停弹窗「回到计划阶段」选项标签。 */
-export const PAUSE_REPLAN = '回到计划阶段'
+const PAUSE_REPLAN = '回到计划阶段'
 /** 暂停/确认点弹窗「终止」选项标签。 */
-export const PAUSE_TERMINATE = '终止'
+const PAUSE_TERMINATE = '终止'
 /** 确认点弹窗「继续」选项标签。 */
-export const CONFIRM_CONTINUE = '继续'
+const CONFIRM_CONTINUE = '继续'
 
 /** 暂停弹窗的选项选择结果（'dismissed'=弹窗被关闭，保持暂停态）。 */
 type PauseChoice = 'retry' | 'skip' | 'next' | 'replan' | 'terminate' | 'dismissed'

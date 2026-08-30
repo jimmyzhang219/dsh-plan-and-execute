@@ -25,7 +25,7 @@ export function classifyOutcome(
 }
 
 /** 决策输出动作：advance=推进下一步；nudge=提示补报；recover=自愈重试；pause=暂停（附原因）。 */
-export type StepAction =
+type StepAction =
   | { kind: 'advance' }
   | { kind: 'nudge' }
   | { kind: 'recover' }

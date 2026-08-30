@@ -7,7 +7,7 @@ import { isAbsolute, join, sep } from 'node:path'
 import type { PlanStep } from './state.ts'
 
 /** 一次 manifest 校验发现的问题（index=-1 表示清单整体问题）。 */
-export interface ManifestIssue {
+interface ManifestIssue {
   /** 出问题的步骤号（1-based；-1 表示清单整体问题）。 */
   readonly index: number
   /** 关联的步骤文件（整体问题时为空串）。 */
@@ -17,7 +17,7 @@ export interface ManifestIssue {
 }
 
 /** 校验结果：通过，或带问题清单驳回。 */
-export type ManifestCheck = { ok: true } | { ok: false; issues: readonly ManifestIssue[] }
+type ManifestCheck = { ok: true } | { ok: false; issues: readonly ManifestIssue[] }
 
 /**
  * 校验步骤清单：路径安全 + 文件存在/非空/是普通文件。

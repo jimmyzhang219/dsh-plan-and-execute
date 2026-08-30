@@ -27,7 +27,7 @@ export interface ModelOption {
 }
 
 /** 模型目录（与宿主 ModelCatalog 形状一致的最小面）。 */
-export interface ModelCatalogLike {
+interface ModelCatalogLike {
   readonly default: { readonly provider: string; readonly model: string }
   readonly groups: ReadonlyArray<{
     readonly id: string

@@ -6,7 +6,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Orchestrator } from './orchestrator.ts'
 
 /** 按会话对象定位编排器的查表函数（无编排返回 undefined）。 */
-export type OrchestratorLookup = (session: object) => Orchestrator | undefined
+type OrchestratorLookup = (session: object) => Orchestrator | undefined
 
 /**
  * 构造 submit_plan 工具：规划阶段提交步骤清单供用户审批。
