@@ -10,6 +10,7 @@
  * @module plan-and-execute/client/PaeReviewCard
  */
 import { useEffect, useState, type ReactElement } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ClientRemote, JsonValue, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only：composer 槽位类型合并（本组件不再消费 useChat/useProjection）。
@@ -106,85 +107,104 @@ export function PaeReviewCard({
   }
 
   return (
-    <section data-testid="pae-review-card" aria-label={review?.question ?? 'plan review'}>
-      <header>
-        <strong>{t('planReview')}</strong>
-        {args?.summary !== undefined ? <p>{args.summary}</p> : null}
-        {canOpen && args !== undefined ? (
-          <button type="button" aria-label={t('openDir')} onClick={() => openPath(args.planDir)}>
-            {t('openDir')}
-          </button>
-        ) : null}
-      </header>
-      {args === undefined ? null : (
-        <ol>
-          {args.steps.map((step, index) => {
-            const i = index + 1
-            const value = selection[i] ?? defaultValue
-            return (
-              <li key={step.file}>
-                <span>
-                  {i}. {step.title}
-                  {step.requiresConfirmation === true ? ' ⚠' : ''}
-                </span>{' '}
-                <code>{step.file}</code>{' '}
-                {canOpen ? (
-                  <button
-                    type="button"
-                    aria-label={t('openFile')}
-                    onClick={() => openPath(`${args.planDir}/${step.file}`)}
-                  >
-                    {t('openFile')}
-                  </button>
-                ) : null}{' '}
-                <select
-                  aria-label={`model-${i}`}
-                  value={value}
-                  onChange={(event) => onModelChange(i, event.target.value)}
-                >
-                  {options.map((option) => (
-                    <option key={optionKey(option)} value={optionKey(option)}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </li>
-            )
-          })}
-        </ol>
-      )}
-      <label>
-        {t('feedback')}
-        <textarea
-          value={feedback}
-          onChange={(event) => setFeedback(event.target.value)}
-          placeholder={t('feedbackHint')}
-        />
-      </label>
-      <div role="status">{error}</div>
-      <footer>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            settle(() => pending.cancel())
-          }}
-        >
-          {t('discuss')}
-        </button>
-        {review?.options.map((option) => (
-          <button
-            key={option.label}
-            type="button"
-            disabled={busy}
-            title={option.description}
-            onClick={() => decide(option.label, feedback)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </footer>
-    </section>
+    <div className="pae-frame">
+      <section
+        className="pae-card"
+        data-testid="pae-review-card"
+        aria-label={review?.question ?? 'plan review'}
+      >
+        <header className="pae-strip">
+          <span className="pae-dot" />
+          <strong>{t('planReview')}</strong>
+          {canOpen && args !== undefined ? (
+            <span className="pae-header-actions">
+              <Button size="sm" aria-label={t('openDir')} onClick={() => openPath(args.planDir)}>
+                {t('openDir')}
+              </Button>
+            </span>
+          ) : null}
+        </header>
+        <div className="pae-body">
+          {args?.summary !== undefined ? <p className="pae-summary">{args.summary}</p> : null}
+          {args === undefined ? null : (
+            <ol className="pae-steps">
+              {args.steps.map((step, index) => {
+                const i = index + 1
+                const value = selection[i] ?? defaultValue
+                return (
+                  <li className="pae-step" key={step.file}>
+                    <span className="pae-step-title">
+                      {i}. {step.title}
+                      {step.requiresConfirmation === true ? ' ⚠' : ''}
+                    </span>
+                    <code className="pae-step-file">{step.file}</code>
+                    {canOpen ? (
+                      <Button
+                        size="sm"
+                        aria-label={t('openFile')}
+                        onClick={() => openPath(`${args.planDir}/${step.file}`)}
+                      >
+                        {t('openFile')}
+                      </Button>
+                    ) : null}
+                    <select
+                      className="pae-step-select"
+                      aria-label={`model-${i}`}
+                      value={value}
+                      onChange={(event) => onModelChange(i, event.target.value)}
+                    >
+                      {options.map((option) => (
+                        <option key={optionKey(option)} value={optionKey(option)}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                )
+              })}
+            </ol>
+          )}
+          <label className="pae-feedback">
+            {t('feedback')}
+            <textarea
+              className="pae-feedback-textarea"
+              value={feedback}
+              onChange={(event) => setFeedback(event.target.value)}
+              placeholder={t('feedbackHint')}
+            />
+          </label>
+          <div className="pae-error" role="status">
+            {error}
+          </div>
+        </div>
+        <footer className="pae-footer">
+          <span className="pae-actions">
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                settle(() => pending.cancel())
+              }}
+            >
+              {t('discuss')}
+            </Button>
+          </span>
+          <span className="pae-actions">
+            {review?.options.map((option, index) => (
+              <Button
+                key={option.label}
+                variant={index === review.options.length - 1 ? 'primary' : 'outline'}
+                disabled={busy}
+                title={option.description}
+                onClick={() => decide(option.label, feedback)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </span>
+        </footer>
+      </section>
+    </div>
   )
 }
 

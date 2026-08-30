@@ -31,6 +31,7 @@ const HOST_PACKAGES = {
   '@deepseek-ai/dsh-client-ui-renderer': 'packages/client/ui-renderer',
   '@deepseek-ai/dsh-client-ui-session': 'packages/client/ui-session',
   '@deepseek-ai/dsh-client-ui-slots': 'packages/client/ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives': 'packages/client/ui-primitives',
   '@deepseek-ai/dsh-client-ui-tool': 'packages/client/ui-tool',
   // conversation.composer 槽位契约与 useChat 标准钩子：审批卡注册/消费所需
   '@deepseek-ai/dsh-client-ui-chat': 'packages/client/ui-chat',

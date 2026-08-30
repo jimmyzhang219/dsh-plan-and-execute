@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { en, NS, zh } from './locale.ts'
+import './styles.ts' // 副作用：按 claimStyles 契约注入审批卡样式（模块顶层执行）
 import { isPlanReviewPending } from './review-card.ts'
 import { PaeReviewCardView, type PaeReviewCardInjected } from './PaeReviewCard.tsx'
 
