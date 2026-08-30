@@ -476,14 +476,20 @@ describe('agent/request waterfall 按步切换模型', () => {
   })
 })
 
-describe('todos 补写（turn/start → session/event）', () => {
-  /** 取宿主 ctx 注册的 'session/event' 监听器（session/event 只从 session 作用域 ctx 分发）。 */
-  function sessionEventHandlerOf(ctx: ReturnType<typeof fakeCtx>) {
-    return ctx.listeners.find((l) => l.event === 'session/event')?.handler as
-      ((session: unknown, event: { type?: unknown }) => void) | undefined
+describe('todos 补写（新回合首个 agent/request）', () => {
+  /** 取 ensure 注册的 todos 刷新监听器（agent/request 的第二个 handler，模型 waterfall 之后）。 */
+  function todosRefreshOf(agent: ReturnType<typeof fakeAgent>) {
+    const onMock = agent.ctx.on as Mock
+    const handlers = onMock.mock.calls.filter(([event]) => event === 'agent/request')
+    return handlers[1]?.[1] as
+      | ((
+          payload: { turn?: unknown },
+          next: () => Promise<LlmCallConfig>,
+        ) => Promise<LlmCallConfig>)
+      | undefined
   }
 
-  it('executing 回合开始 → 补发 todo/write（宿主 turn/start 清空投影后恢复面板）', async () => {
+  it('executing 新回合首个请求 → 补发 todo/write（宿主 turn/start 清空投影后恢复面板）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
@@ -499,33 +505,33 @@ describe('todos 补写（turn/start → session/event）', () => {
     })
     const agent = fakeAgent('executing')
     await fireCreated(ctx, agent)
-    const handler = sessionEventHandlerOf(ctx)
+    const handler = todosRefreshOf(agent)
     expect(handler).toBeDefined()
-    handler!(agent.session, { type: 'turn/start' })
+    await handler!({ turn: 2 }, async () => ({ provider: 's', model: 'm' }))
     expect(agent.session.append).toHaveBeenCalledWith(
       'todo/write',
       expect.objectContaining({ todos: expect.any(Array) }),
     )
+    // 同一回合的后续请求不再补写
+    const before = (agent.session.append as Mock).mock.calls.filter(
+      ([t]) => t === 'todo/write',
+    ).length
+    await handler!({ turn: 2 }, async () => ({ provider: 's', model: 'm' }))
+    expect(
+      (agent.session.append as Mock).mock.calls.filter(([t]) => t === 'todo/write'),
+    ).toHaveLength(before)
   })
 
-  it('非 turn/start 事件 / 无编排的会话 → 不补写', async () => {
+  it('planning 阶段新回合 → 不补写（refreshTodos 阶段守卫）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    await seedState('executing', {
-      stepIndex: 1,
-      plan: {
-        planDir: join(cwd, '.pae', 'sess-1'),
-        steps: [{ file: 'a.md', title: 'A' }],
-      },
-    })
-    const agent = fakeAgent('executing')
+    await seedState('planning')
+    const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const handler = sessionEventHandlerOf(ctx)
-    handler!(agent.session, { type: 'turn/end' })
+    const handler = todosRefreshOf(agent)
+    await handler!({ turn: 1 }, async () => ({ provider: 's', model: 'm' }))
     expect(agent.session.append).not.toHaveBeenCalledWith('todo/write', expect.anything())
-    // 无编排的会话（未 fireCreated）：WeakMap 查表过滤，不抛
-    handler!({ id: 'other' }, { type: 'turn/start' })
   })
 })
 
