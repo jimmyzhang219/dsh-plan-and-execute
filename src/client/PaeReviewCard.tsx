@@ -15,8 +15,7 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only：composer 槽位类型合并（本组件不再消费 useChat/useProjection）。
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { CardArgs, ModelOption } from './plan-card.ts'
-import { flattenCatalog } from './plan-card.ts'
-import { optionKey } from './PlanCard.tsx'
+import { flattenCatalog, optionKey } from './plan-card.ts'
 import { PAE_MODELS_NS } from '../state.ts'
 import {
   buildSettingsPatch,
