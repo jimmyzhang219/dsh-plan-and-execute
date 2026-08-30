@@ -1,4 +1,14 @@
-# dsh-plan-and-execute（dsh 插件）
+<div align="center">
+Plan-and-Execute orchestration plugin for DeepSeek Harness (dsh).
+
+![dsh plugin](https://img.shields.io/badge/dsh-plugin-8B5CF6.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6.svg?logo=typescript&logoColor=white)
+![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933.svg?logo=nodedotjs&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+
+<p align="center"><em>by Jimmy Zhang</em></p>
+
+</div>
 
 dsh 的 Plan-and-Execute 编排插件：`/plan-and-execute <任务>` 启动"规划 → 审批 → 逐步执行"。
 全部 LLM 交互委托给宿主 ReactLoopAgent；控制流持久化在 `pae/*` 会话事件，步骤内容在
@@ -24,8 +34,10 @@ pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝�
 ## 正式安装
 
 ```sh
-pnpm build
-dsh plugin --profile <name> add /Users/jimmy/VSCodeProjects/dsh-plugin/dsh-plan-and-execute
+git clone https://github.com/jimmyzhang219/dsh-plan-and-execute.git
+cd dsh-plan-and-execute
+pnpm install && pnpm build
+dsh plugin --profile <name> add .
 ```
 
 ## 手工验收清单（`pnpm dev` + Web UI）
