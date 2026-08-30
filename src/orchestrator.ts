@@ -354,6 +354,19 @@ export class Orchestrator {
     return this.state.stepModels.get(stepIndex)
   }
 
+  /**
+   * 重新写入当前 todo 快照（供宿主 turn/start 后补写）。
+   * 宿主 `todos` 投影语义：每个 turn/start 清空为 null（假定模型每回合重写清单），
+   * 我们由插件驱动 todo 且写入发生在 steer 之前 → 面板在回合内消失。
+   * 在 turn/start 之后补发一次 todo/write 可让面板在整个执行期持续可见。
+   */
+  refreshTodos(): void {
+    const plan = this.state.plan
+    if (plan === undefined) return
+    if (this.state.phase !== 'executing' && this.state.phase !== 'paused') return
+    this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+  }
+
   /** report_step 工具入口（按显式步号；步号由编排器判定，防伪造）。 */
   async reportStep(stepIndex: number, outcome: 'done' | 'blocked', summary: string): Promise<void> {
     const folded = this.folded()

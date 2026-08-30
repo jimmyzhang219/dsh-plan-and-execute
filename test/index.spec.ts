@@ -476,6 +476,62 @@ describe('agent/request waterfall 按步切换模型', () => {
   })
 })
 
+describe('todos 补写（turn/start → session/event）', () => {
+  /** 取 ensure 注册的 'session/event' 监听器。 */
+  function sessionEventHandlerOf(agent: ReturnType<typeof fakeAgent>) {
+    const onMock = agent.ctx.on as Mock
+    return onMock.mock.calls.find(([event]) => event === 'session/event')?.[1] as
+      | ((session: unknown, event: { type?: unknown }) => void)
+      | undefined
+  }
+
+  it('executing 回合开始 → 补发 todo/write（宿主 turn/start 清空投影后恢复面板）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('executing', {
+      stepIndex: 1,
+      plan: {
+        planDir: join(cwd, '.pae', 'sess-1'),
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B' },
+        ],
+      },
+    })
+    const agent = fakeAgent('executing')
+    await fireCreated(ctx, agent)
+    const handler = sessionEventHandlerOf(agent)
+    expect(handler).toBeDefined()
+    handler!(agent.session, { type: 'turn/start' })
+    expect(agent.session.append).toHaveBeenCalledWith(
+      'todo/write',
+      expect.objectContaining({ todos: expect.any(Array) }),
+    )
+  })
+
+  it('非 turn/start 事件不触发补写', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('executing', {
+      stepIndex: 1,
+      plan: {
+        planDir: join(cwd, '.pae', 'sess-1'),
+        steps: [{ file: 'a.md', title: 'A' }],
+      },
+    })
+    const agent = fakeAgent('executing')
+    await fireCreated(ctx, agent)
+    const handler = sessionEventHandlerOf(agent)
+    handler!(agent.session, { type: 'turn/end' })
+    expect(agent.session.append).not.toHaveBeenCalledWith(
+      'todo/write',
+      expect.anything(),
+    )
+  })
+})
+
 describe('settings/updated 桥接', () => {
   it('本命名空间变更 → 解析校验后 applyStepModels（按 sessionId 定位编排器）', async () => {
     const { apply } = await import('../src/index.ts')

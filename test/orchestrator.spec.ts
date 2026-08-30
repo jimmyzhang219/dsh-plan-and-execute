@@ -558,6 +558,42 @@ describe('applyStepModels / stepModelFor', () => {
     expect(orchestrator.stepModelFor(1)).toBeUndefined()
   })
 
+  it('refreshTodos：executing 且有计划 → 重写当前状态快照（宿主 turn/start 清空后补写）', async () => {
+    const { orchestrator, agent } = await makeOrchestrator(
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
+      [answer('pae-approve', '批准')],
+    )
+    const before = agent.session.todosWrites.length
+    orchestrator.refreshTodos()
+    expect(agent.session.todosWrites.length).toBe(before + 1)
+    const last = agent.session.todosWrites.at(-1)!
+    expect(last.map((t) => t.content)).toEqual(['1. A', '2. B'])
+  })
+
+  it('refreshTodos：planning / 无计划 → 不写', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const { FakeAgent, FakeStorage, fakeAsk } = await import('./helpers.ts')
+    const { mkdtemp } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-refresh-'))
+    const agent = new FakeAgent()
+    const orchestrator = new Orchestrator({
+      agent,
+      ask: fakeAsk().ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage: new FakeStorage(),
+    })
+    await orchestrator.begin('T') // planning 且无计划
+    const before = agent.session.todosWrites.length
+    orchestrator.refreshTodos()
+    expect(agent.session.todosWrites.length).toBe(before)
+  })
+
   it('revive 从持久化恢复 stepModels', async () => {
     const revived = new FakeRevivedSession()
     revived.storage.state = {

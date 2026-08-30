@@ -171,6 +171,15 @@ export function apply(ctx: Context, config: Config): void {
       },
     )
     ctx.effect(() => () => disposeStepModel(), 'plan-and-execute: step model waterfall')
+    // 宿主 todos 投影在 turn/start 清空（假定模型每回合重写清单）；插件驱动的 todo
+    // 写在 steer 之前会被清掉 → 面板消失。turn/start 后补发 todo/write 保持面板可见。
+    const disposeTodosRefresh = agent.ctx.on(
+      'session/event',
+      (_session: unknown, event: { type?: unknown }) => {
+        if (event?.type === 'turn/start') orchestrator.refreshTodos()
+      },
+    )
+    ctx.effect(() => () => disposeTodosRefresh(), 'plan-and-execute: todos refresh on turn/start')
     return orchestrator
   }
 
