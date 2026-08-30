@@ -761,7 +761,7 @@ pnpm build
 pnpm lint
 ```
 
-预期：全绿（96 + 任务 2 新增 - 任务 3 删除的用例数净变化按实现为准）。冒烟（宿主已构建时）：`node scripts/dev.mjs` 起 Web UI，执行 `/plan-and-execute 做点什么`——输入座出现自定义审批卡（步骤行+下拉+打开按钮+决策按钮），改下拉后 settings 文件出现 `pae-step-models` 段、无需任何消息即生效；点批准进入执行。若无法交互式冒烟，记录并交验收清单。
+预期：全绿（96 + 任务 2 新增 - 任务 3 删除的用例数净变化按实现为准）。冒烟（宿主已构建时）：`node scripts/dev.mjs` 起 Web UI，执行 `/plan-and-execute 做点什么`——输入座出现自定义审批卡（步骤行+模型下拉+打开按钮+决策按钮），改下拉后 settings 文件出现 `pae-step-models` 段、无需任何消息即生效；点批准进入执行；会话流 toolview 卡为纯展示（无下拉）。若无法交互式冒烟，记录并交验收清单。
 
 - [ ] **步骤 5：Commit**
 
