@@ -21,7 +21,6 @@ import {
   type PersistedStorage,
 } from './persist.ts'
 import {
-  completionDetail,
   kickoffInstruction,
   nudgeInstruction,
   planReviewDetail,
@@ -92,8 +91,6 @@ export const PAUSE_REPLAN = '回到计划阶段'
 export const PAUSE_TERMINATE = '终止'
 /** 确认点弹窗「继续」选项标签。 */
 export const CONFIRM_CONTINUE = '继续'
-/** 完成通知「知道了」选项标签。 */
-export const DONE_ACK = '知道了'
 
 /** 暂停弹窗的选项选择结果（'dismissed'=弹窗被关闭，保持暂停态）。 */
 type PauseChoice = 'retry' | 'skip' | 'next' | 'replan' | 'terminate' | 'dismissed'
@@ -698,16 +695,8 @@ export class Orchestrator {
     }
     await this.save()
     if (phase === 'completed') {
+      // 完成不再弹通知卡（2026-08-30 需求：去掉最后的审批卡提醒）；todo 表已反映终态
       this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
-      void this.askOrDismiss([
-        {
-          id: 'pae-done',
-          header: 'Plan-and-Execute 完成',
-          question: '计划已全部执行完成。',
-          detail: completionDetail(plan.steps, this.state.stepReports, this.state.skipped),
-          options: [{ label: DONE_ACK, description: '关闭通知' }],
-        },
-      ])
     }
   }
 

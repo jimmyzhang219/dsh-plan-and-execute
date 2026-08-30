@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  completionDetail,
   EXECUTING_SECTION_BODY,
   kickoffInstruction,
   nudgeInstruction,
@@ -80,17 +79,5 @@ describe('详情渲染', () => {
     )
     expect(detail).toContain('1. A — step-01-a.md')
     expect(detail).toContain('2. B — step-02-b.md ⚠ 确认点')
-  })
-  it('completionDetail 汇总各步结局，跳过步标注', () => {
-    const detail = completionDetail(
-      [
-        { file: 'a.md', title: 'A' },
-        { file: 'b.md', title: 'B' },
-      ],
-      new Map([[1, { stepIndex: 1, outcome: 'done' as const, summary: '完成 A' }]]),
-      new Set([2]),
-    )
-    expect(detail).toContain('1. A — done：完成 A')
-    expect(detail).toContain('2. B — skipped')
   })
 })

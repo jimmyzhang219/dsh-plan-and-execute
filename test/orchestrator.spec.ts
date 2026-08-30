@@ -250,11 +250,8 @@ describe('暂停与恢复决策', () => {
       2,
       2,
     )
-    await vi.waitFor(() => {
-      const doneAsk = received.at(-1)?.[0]
-      expect(doneAsk?.id).toBe('pae-done')
-      expect(doneAsk?.detail).toContain('skipped')
-    })
+    // 完成不再弹通知卡（2026-08-30 需求）：无 pae-done 提问，todo 表反映终态
+    expect(received.flat().map((q) => q.id)).not.toContain('pae-done')
   })
 })
 
@@ -283,11 +280,8 @@ describe('确认点 / replan / revive', () => {
       [{ file: 'a.md', title: 'A', requiresConfirmation: true }],
       [answer('pae-approve', '批准'), answer('pae-confirm', '跳过该步')],
     )
-    await vi.waitFor(() => {
-      const doneAsk = received.at(-1)?.[0]
-      expect(doneAsk?.id).toBe('pae-done')
-      expect(doneAsk?.detail).toContain('skipped')
-    })
+    // 完成不再弹通知卡：无 pae-done 提问
+    expect(received.flat().map((q) => q.id)).not.toContain('pae-done')
     // 没有任何步骤指令被注入（A 被跳过）
     const texts = agent.steered.map((m) => (m.content[0] as { text: string }).text)
     expect(texts.some((t) => t.includes('执行计划第 1/1 步'))).toBe(false)

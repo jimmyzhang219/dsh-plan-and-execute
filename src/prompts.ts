@@ -7,7 +7,6 @@ import type { UserMessage } from '@deepseek-ai/dsh-session'
 import {
   PAE_PLUGIN,
   type PaePlanPayload,
-  type PaeStepReportPayload,
   type PlanStep,
 } from './state.ts'
 
@@ -125,21 +124,6 @@ export function planReviewDetail(steps: readonly PlanStep[], planDir: string): s
     return `${index + 1}. ${step.title} — ${step.file}${mark}`
   })
   return [`计划目录：${planDir}`, ...lines].join('\n')
-}
-
-/** 完成通知的逐步结局详情文本（done/blocked/skipped + 汇报摘要）。 */
-export function completionDetail(
-  steps: readonly PlanStep[],
-  reports: ReadonlyMap<number, PaeStepReportPayload>,
-  skipped: ReadonlySet<number>,
-): string {
-  const lines = steps.map((step, index) => {
-    const i = index + 1
-    if (skipped.has(i)) return `${i}. ${step.title} — skipped`
-    const report = reports.get(i)
-    return `${i}. ${step.title} — ${report?.outcome ?? 'done'}：${report?.summary ?? ''}`
-  })
-  return lines.join('\n')
 }
 
 /** 计划的一句话摘要（缺省时退化为"共 N 步"）。 */
