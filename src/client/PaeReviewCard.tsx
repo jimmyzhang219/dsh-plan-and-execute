@@ -37,13 +37,21 @@ interface AnswerLike {
 }
 
 export interface PaeReviewCardProps {
+  /** 会话标识（与宿主 agent.id 同源；空串时跳过模型选择静默写）。 */
   readonly sessionId: string
+  /** 结构判定通过的待审批交互（kind==='plan-review'）。 */
   readonly pending: PlanReviewPendingLike
+  /** 解析出的步骤数据（parsePlanDetail 产物；undefined 时仅渲染决策区）。 */
   readonly args: CardArgs | undefined
+  /** 宿主可打开工作区路径（canOpenWorkspacePath；联动步骤标题点击）。 */
   readonly canOpen: boolean
+  /** 展平后的模型下拉选项（目录未就绪时为空数组）。 */
   readonly options: readonly ModelOption[]
+  /** 当前会话模型（下拉默认值；provider|model 拼接）。 */
   readonly current: { readonly provider: string; readonly model: string }
+  /** 打开路径回调（目录/步骤文件，经 session.openWorkspacePath）。 */
   readonly openPath: (path: string) => void
+  /** 静默写 settings 通道（模型选择持久化）。 */
   readonly settings: {
     readonly update: (
       ns: string,
@@ -51,6 +59,7 @@ export interface PaeReviewCardProps {
       rev: number | undefined,
     ) => Promise<unknown>
   }
+  /** 文案翻译函数（locale 注入；键见 locale.ts）。 */
   readonly t: (key: string) => string
 }
 
@@ -73,6 +82,7 @@ export function PaeReviewCard({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  /** 决策提交包装：置 busy、清错误；send 抛错时折叠为卡片内错误文案。 */
   const settle = (send: () => Promise<unknown>): void => {
     setBusy(true)
     setError(null)
@@ -81,6 +91,7 @@ export function PaeReviewCard({
       setError(cause instanceof Error ? cause.message : String(cause))
     })
   }
+  /** 决策按钮点击：按所选标签组装 answers 载荷并提交（pending.answer）。 */
   const decide = (label: string, custom?: string): void => {
     if (review === undefined) return
     const answers: AnswerLike['answers'] = [
@@ -102,6 +113,7 @@ export function PaeReviewCard({
     if (label === '继续修改') return t('keep')
     return label
   }
+  /** 模型下拉变更：本地 selection 更新 + settings 静默写（无 sessionId 时仅本地生效）。 */
   const onModelChange = (step: number, value: string): void => {
     const next = { ...selection, [step]: value }
     setSelection(next)
@@ -266,6 +278,7 @@ export function PaeReviewCardView({
   const [catalog, setCatalog] = useState<ModelCatalog | undefined>(undefined)
   const [canOpen, setCanOpen] = useState(false)
 
+  /** 挂载时并行取模型目录与「可打开工作区路径」能力；cancelled 竞态防护（卸载后不再 setState）。 */
   useEffect(() => {
     let cancelled = false
     void Promise.all([sessionRemote.modelCatalog(), sessionRemote.canOpenWorkspacePath()])
