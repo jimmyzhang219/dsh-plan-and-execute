@@ -12,7 +12,7 @@ export const NS = 'plan-and-execute'
 export const zh = {
   planReview: '计划审批',
   openDir: '打开计划目录',
-  openFile: '打开文件',
+  openStep: '打开步骤文件',
   feedback: '驳回反馈',
   feedbackHint: '选「继续修改」时附上反馈，可选',
   discuss: '讨论',
@@ -22,7 +22,7 @@ export const zh = {
 export const en: Record<PaeCardKey, string> = {
   planReview: 'Plan review',
   openDir: 'Open plan directory',
-  openFile: 'Open file',
+  openStep: 'Open step file',
   feedback: 'Rejection feedback',
   feedbackHint: 'Feedback when declining, optional',
   discuss: 'Discuss',

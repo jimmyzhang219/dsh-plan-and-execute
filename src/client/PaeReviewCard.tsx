@@ -133,20 +133,24 @@ export function PaeReviewCard({
                 const value = selection[i] ?? defaultValue
                 return (
                   <li className="pae-step" key={step.file}>
-                    <span className="pae-step-title">
-                      {i}. {step.title}
-                      {step.requiresConfirmation === true ? ' ⚠' : ''}
-                    </span>
-                    <code className="pae-step-file">{step.file}</code>
                     {canOpen ? (
-                      <Button
-                        size="sm"
-                        aria-label={t('openFile')}
+                      // 点击步骤标题在宿主机默认应用打开步骤 md 文件（文件名不再展示）
+                      <button
+                        type="button"
+                        className="pae-step-title-btn"
+                        aria-label={`${t('openStep')} ${i}. ${step.title}`}
+                        title={`${args.planDir}/${step.file}`}
                         onClick={() => openPath(`${args.planDir}/${step.file}`)}
                       >
-                        {t('openFile')}
-                      </Button>
-                    ) : null}
+                        {i}. {step.title}
+                        {step.requiresConfirmation === true ? ' ⚠' : ''}
+                      </button>
+                    ) : (
+                      <span className="pae-step-title">
+                        {i}. {step.title}
+                        {step.requiresConfirmation === true ? ' ⚠' : ''}
+                      </span>
+                    )}
                     <select
                       className="pae-step-select"
                       aria-label={`model-${i}`}

@@ -73,12 +73,20 @@ const CSS = `
   min-width: 0;
 }
 .pae-step-title { flex: none; }
-.pae-step-file {
+.pae-step-title-btn {
   flex: none;
-  color: var(--dsw-alias-label-tertiary, inherit);
-  font-size: 12px;
-  line-height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
 }
+.pae-step-title-btn:hover { color: var(--dsw-alias-label-primary, inherit); }
 .pae-step-select {
   flex: 1 1 auto;
   min-width: 0;

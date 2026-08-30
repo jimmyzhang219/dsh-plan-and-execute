@@ -59,9 +59,9 @@ const base: PaeReviewCardProps = {
 describe('PaeReviewCard', () => {
   it('渲染步骤行（标题/文件/⚠）与模型下拉，默认 = 当前会话模型', () => {
     render(<PaeReviewCard {...base} />)
-    // 行内 span 文本为「序号. 标题 ⚠」整体（getByText 默认精确匹配整段文本）
-    expect(screen.getByText('2. 步骤 B ⚠')).toBeTruthy()
-    expect(screen.getByText('b.md')).toBeTruthy()
+    // 行内标题为可点击按钮（打开步骤文件），文件名不再展示
+    expect(screen.getByRole('button', { name: 'openStep 2. 步骤 B' })).toBeTruthy()
+    expect(screen.queryByText('b.md')).toBeNull()
     const selects = screen.getAllByRole('combobox')
     expect(selects).toHaveLength(2)
     expect((selects[1] as HTMLSelectElement).value).toBe('deepseek-official|deepseek-v4-flash')
@@ -109,11 +109,11 @@ describe('PaeReviewCard', () => {
     await waitFor(() => expect(base.pending.cancel).toHaveBeenCalled())
   })
 
-  it('canOpen 时「打开计划目录」→ openPath(planDir)；每行「打开文件」→ openPath(planDir/file)', () => {
+  it('canOpen 时「打开计划目录」→ openPath(planDir)；点击步骤标题 → openPath(planDir/file)', () => {
     render(<PaeReviewCard {...base} />)
     fireEvent.click(screen.getByRole('button', { name: 'openDir' }))
     expect(base.openPath).toHaveBeenCalledWith('.pae/sess-1')
-    fireEvent.click(screen.getAllByRole('button', { name: 'openFile' })[1]!)
+    fireEvent.click(screen.getByRole('button', { name: 'openStep 2. 步骤 B' }))
     expect(base.openPath).toHaveBeenCalledWith('.pae/sess-1/b.md')
   })
 
@@ -213,8 +213,7 @@ describe('PaeReviewCardView', () => {
       />,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: '批准' })).toBeTruthy())
-    expect(screen.getByText(/计算 2\+2/)).toBeTruthy()
-    expect(screen.getByText('b.md')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'openStep 2. 计算 2+2' })).toBeTruthy()
   })
 
   it('sessionId undefined 时回退 pending.sessionId（settings 写键正确，不空白）', async () => {
@@ -252,6 +251,6 @@ describe('PaeReviewCardView', () => {
       />,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: '批准' })).toBeTruthy())
-    expect(screen.queryByText('b.md')).toBeNull()
+    expect(screen.queryByRole('button', { name: /openStep/ })).toBeNull()
   })
 })
