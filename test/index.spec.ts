@@ -481,8 +481,7 @@ describe('todos 补写（turn/start → session/event）', () => {
   function sessionEventHandlerOf(agent: ReturnType<typeof fakeAgent>) {
     const onMock = agent.ctx.on as Mock
     return onMock.mock.calls.find(([event]) => event === 'session/event')?.[1] as
-      | ((session: unknown, event: { type?: unknown }) => void)
-      | undefined
+      ((session: unknown, event: { type?: unknown }) => void) | undefined
   }
 
   it('executing 回合开始 → 补发 todo/write（宿主 turn/start 清空投影后恢复面板）', async () => {
@@ -525,10 +524,7 @@ describe('todos 补写（turn/start → session/event）', () => {
     await fireCreated(ctx, agent)
     const handler = sessionEventHandlerOf(agent)
     handler!(agent.session, { type: 'turn/end' })
-    expect(agent.session.append).not.toHaveBeenCalledWith(
-      'todo/write',
-      expect.anything(),
-    )
+    expect(agent.session.append).not.toHaveBeenCalledWith('todo/write', expect.anything())
   })
 })
 
