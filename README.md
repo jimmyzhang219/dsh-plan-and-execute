@@ -17,7 +17,7 @@ dsh 的 Plan-and-Execute 编排插件：`/plan-and-execute <任务>` 启动"规�
 ## 开发
 
 ```sh
-pnpm install          # postinstall 软链宿主包（DSH_ROOT 默认 ~/git/deepseek-harness，需先在 dsh 仓库 pnpm install && pnpm run build）
+pnpm install && pnpm link:host   # link:host 软链宿主包（DSH_ROOT 默认 ~/git/deepseek-harness，需先在 dsh 仓库 pnpm install && pnpm run build）
 pnpm test             # vitest 单测
 pnpm typecheck && pnpm lint && pnpm format:check
 pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝对路径 overlay）

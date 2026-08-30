@@ -31,7 +31,6 @@
     "format:check": "prettier --check .",
     "link:host": "node scripts/link-host.mjs",
     "dev": "node scripts/dev.mjs",
-    "postinstall": "node scripts/link-host.mjs",
     "prepare": "husky || true",
     "prepublishOnly": "pnpm build"
   },
