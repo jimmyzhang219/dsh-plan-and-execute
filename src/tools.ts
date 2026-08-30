@@ -112,7 +112,6 @@ export function createReportStepTool(lookup: OrchestratorLookup) {
     parameters: {
       outcome: { type: 'string', required: true, description: "'done' 或 'blocked'" },
       summary: { type: 'string', required: true, description: '一两句结果/原因（改动要点、产出）' },
-      artifacts: { type: 'string', description: '可选：本步关键产出文件（逗号分隔）' },
     },
     output: {
       schema: {
