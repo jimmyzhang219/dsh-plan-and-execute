@@ -58,6 +58,7 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
           feedback: { type: 'string', description: '未批准原因（用户驳回反馈或搁置说明）' },
         },
       } as const,
+      // 结果文本：批准提示进入逐步执行；未批准附 feedback（驳回/搁置是正常流程，不抛错）。
       render: (_args, value) => [
         {
           type: 'text',
@@ -67,6 +68,7 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
         },
       ],
     },
+    // 执行：按会话查编排器；无编排/无 agent 时抛错；驳回/搁置以 approved:false + feedback 正常返回（避免消息流红色 Error）。
     execute: async (args, exec) => {
       if (exec.agent === undefined) throw new Error('submit_plan 需要调用 agent（无会话可切换）')
       const orchestrator = lookup(exec.agent.session as object)
@@ -78,6 +80,7 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
       if (!verdict.approved) return { approved: false, feedback: verdict.error }
       return { approved: true }
     },
+    // 调用侧卡片：计划目录 + 步骤清单（确认点标记 ⚠）。
     presentCall: (args) => ({
       card: 'generic',
       title: `计划提交（${args.steps.length} 步）`,
@@ -119,8 +122,10 @@ export function createReportStepTool(lookup: OrchestratorLookup) {
         additionalProperties: false,
         properties: { received: { type: 'boolean', required: true } },
       } as const,
+      // 结果文本：收到即已记录。
       render: (_args, value) => [{ type: 'text', text: value.received ? '已记录。' : '未记录。' }],
     },
+    // 执行：outcome 校验 + 步号由编排器判定（reportStepForCurrent，防伪造）；无编排时抛错。
     execute: async (args, exec) => {
       if (exec.agent === undefined) throw new Error('report_step 需要调用 agent')
       const orchestrator = lookup(exec.agent.session as object)
@@ -133,6 +138,7 @@ export function createReportStepTool(lookup: OrchestratorLookup) {
       orchestrator.reportStepForCurrent(args.outcome, args.summary)
       return { received: true }
     },
+    // 调用侧卡片：结局标签 + 汇报摘要。
     presentCall: (args) => ({
       card: 'generic',
       title: `步骤汇报：${args.outcome}`,
