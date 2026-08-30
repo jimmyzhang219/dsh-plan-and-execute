@@ -649,7 +649,12 @@ describe('settings/updated 桥接', () => {
     await chmod(join(cwd, '.pae', 'sess-1'), 0o500)
     try {
       await expect(
-        listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user'),
+        listener!(
+          'pae-step-models',
+          { 'sess-1': { 1: { provider: 'a', model: 'm' } } },
+          {},
+          'user',
+        ),
       ).rejects.toThrow()
     } finally {
       await chmod(join(cwd, '.pae', 'sess-1'), 0o700)
@@ -669,7 +674,12 @@ describe('settings/updated 桥接', () => {
     const listener = settingsListenerOf(ctx)
     expect(listener).toBeDefined()
     ctx.llm.resolveCallConfig.mockRejectedValue(new Error('unknown model'))
-    await listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
+    await listener!(
+      'pae-step-models',
+      { 'sess-1': { 1: { provider: 'a', model: 'm' } } },
+      {},
+      'user',
+    )
     await vi.waitFor(async () => {
       const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
       expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'p1', model: 'm1' } })

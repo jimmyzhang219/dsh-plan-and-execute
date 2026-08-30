@@ -21,7 +21,14 @@ import { PaeReviewCardView, type PaeReviewCardInjected } from './PaeReviewCard.t
 /** 插件名（与宿主 half 同名，供模块表路由）。 */
 export const name = 'plan-and-execute'
 /** 必需服务注入：槽位注册表、文案字典、远程会话/设置面与连接面。 */
-export const inject = ['slots', 'locale', 'remote', 'remote.session', 'remote.settings', 'connection']
+export const inject = [
+  'slots',
+  'locale',
+  'remote',
+  'remote.session',
+  'remote.settings',
+  'connection',
+]
 
 /** 客户端入口：注册字典、submit_plan toolview 槽位与 plan-review 审批卡 composer。 */
 export function apply(ctx: Context): void {

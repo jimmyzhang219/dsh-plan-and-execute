@@ -3,12 +3,14 @@
  * @module plan-and-execute/client/review-card
  */
 import type { CardArgs } from './plan-card.ts'
-import { parseCardArgs, serializeStepModels } from './plan-card.ts'
+import { serializeStepModels } from './plan-card.ts'
 
 /** 结构判定面：plan-review 待审批（避免 instanceof 值导入非种子包）。 */
 export interface PlanReviewPendingLike {
   readonly kind: 'plan-review'
   readonly key: string
+  /** 宿主 PendingQuestion 自带会话标识（composer owner sessionId 缺失时回退）。 */
+  readonly sessionId?: string
   readonly questions: readonly unknown[]
   readonly answer: (answer: unknown) => Promise<unknown>
   readonly cancel: () => Promise<unknown>
@@ -26,22 +28,25 @@ export function isPlanReviewPending(value: unknown): value is PlanReviewPendingL
   )
 }
 
-/** 审批卡决策面（首个问题的 id/标题/选项）。 */
+/** 审批卡决策面（首个问题的 id/标题/选项/详情文本）。 */
 export interface ReviewView {
   readonly id: string
   readonly question: string
   readonly options: ReadonlyArray<{ readonly label: string; readonly description?: string }>
+  /** 问题详情文本（planReviewDetail 输出；步骤数据来源）。 */
+  readonly detail?: string
 }
 
 /** 从问题载荷提取决策面；形状不符返回 undefined。 */
-export function questionView(
-  questions: readonly unknown[],
-): ReviewView | undefined {
-  const q = questions[0] as {
-    id?: unknown
-    question?: unknown
-    options?: unknown
-  } | undefined
+export function questionView(questions: readonly unknown[]): ReviewView | undefined {
+  const q = questions[0] as
+    | {
+        id?: unknown
+        question?: unknown
+        options?: unknown
+        detail?: unknown
+      }
+    | undefined
   if (typeof q?.id !== 'string' || typeof q?.question !== 'string') return undefined
   if (!Array.isArray(q.options)) return undefined
   const options: Array<ReviewView['options'][number]> = []
@@ -54,7 +59,40 @@ export function questionView(
     })
   }
   if (options.length === 0) return undefined
-  return { id: q.id, question: q.question, options }
+  return {
+    id: q.id,
+    question: q.question,
+    options,
+    ...(typeof q.detail === 'string' ? { detail: q.detail } : {}),
+  }
+}
+
+/**
+ * 从审批问题详情（宿主 planReviewDetail 输出，本插件自有格式）解析步骤数据。
+ * 格式：首行 `计划目录：<planDir>`，后续行 `N. <标题> — <文件>[ ⚠ 确认点]`。
+ * 标题可含 " — "（以最后一个分隔符切分）；非标准行跳过；缺计划目录行返回 undefined。
+ * 注意：审批卡不读 chat 快照（composer 座位 useChat 会导致宿主聊天快照
+ * 构建器脱绑崩溃——2026-08-30 线上事故），步骤数据一律来自本函数。
+ */
+export function parsePlanDetail(detail: string): CardArgs | undefined {
+  const lines = detail.split('\n')
+  const first = lines[0]?.trim() ?? ''
+  if (!first.startsWith('计划目录：')) return undefined
+  const planDir = first.slice('计划目录：'.length).trim()
+  if (planDir === '') return undefined
+  const steps: Array<CardArgs['steps'][number]> = [] // ReadonlyArray 无 push
+  for (const line of lines.slice(1)) {
+    const match = /^(\d+)\. (.+) — (.+?)( ⚠ 确认点)?$/.exec(line.trim())
+    if (match === null) continue
+    // noUncheckedIndexedAccess：正则保证分组 2-3 非空，解构默认值仅为类型收窄
+    const [, , title = '', file = '', mark] = match
+    steps.push({
+      file,
+      title,
+      ...(mark === undefined ? {} : { requiresConfirmation: true }),
+    })
+  }
+  return { planDir, steps }
 }
 
 /** 下拉选择 → settings.update 载荷（sessionId 键 + 完整修改后映射）。 */
@@ -63,46 +101,4 @@ export function buildSettingsPatch(
   selection: Readonly<Record<number, string>>,
 ): Record<string, Record<number, { provider: string; model: string }>> {
   return { [sessionId]: serializeStepModels(selection) }
-}
-
-/**
- * 从 chat 快照取最新 submit_plan 调用参数。
- * 遍历 conversation 树找 tool-call 节点（toolName==='submit_plan'，取最后出现者），
- * 读 argsRaw 经 parseCardArgs 解析。节点形状以宿主
- * packages/client/ui-chat/src/client/conversation-nodes（ToolCallBlock）为准：
- * ChatNode<'tool-call'> = ChatConversationViewNode & { kind: 'tool-call', data: { root } }；
- * root 为 RunningToolCall（name/argsRaw 顶层）或 ToolResultNode（call 回填 name/argsRaw），
- * 两者都以 subCalls 递归持有子调用。找不到或形状不符返回 undefined
- * （卡片退化为仅决策按钮）。
- */
-export function findLatestSubmitPlanArgs(chat: unknown): CardArgs | undefined {
-  if (typeof chat !== 'object' || chat === null) return undefined
-  const values = (chat as { nodes?: { values?: unknown } }).nodes?.values
-  if (typeof values !== 'function') return undefined
-  let latestRaw: string | undefined
-  // 递归遍历 ToolCallBlock 树（root + subCalls）：running/settled 两形态各取 name/argsRaw。
-  const visit = (block: unknown): void => {
-    if (typeof block !== 'object' || block === null) return
-    const b = block as { name?: unknown; argsRaw?: unknown; call?: unknown; subCalls?: unknown }
-    const name = typeof b.name === 'string' ? b.name : (b.call as { name?: unknown } | null)?.name
-    const raw =
-      typeof b.argsRaw === 'string' ? b.argsRaw : (b.call as { argsRaw?: unknown } | null)?.argsRaw
-    if (name === 'submit_plan' && typeof raw === 'string') latestRaw = raw
-    if (Array.isArray(b.subCalls)) for (const child of b.subCalls) visit(child)
-  }
-  for (const node of (values as () => readonly unknown[])()) {
-    if (typeof node !== 'object' || node === null) continue
-    const n = node as { kind?: unknown; data?: unknown }
-    if (n.kind !== 'tool-call') continue
-    visit((n.data as { root?: unknown } | null)?.root)
-  }
-  if (latestRaw === undefined) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(latestRaw)
-  } catch {
-    // 流式可见截断的 JSON 前缀：按不可解析处理（PlanCard 同款容错）
-    return undefined
-  }
-  return parseCardArgs(parsed)
 }

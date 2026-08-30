@@ -81,7 +81,10 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
       content: [
         { type: 'text' as const, text: `计划目录：${args.planDir}` },
         ...args.steps.map(
-          (step: { title: string; file: string; requiresConfirmation?: boolean }, index: number) => ({
+          (
+            step: { title: string; file: string; requiresConfirmation?: boolean },
+            index: number,
+          ) => ({
             type: 'text' as const,
             text: `${index + 1}. ${step.title} — ${step.file}${step.requiresConfirmation === true ? ' ⚠ 确认点' : ''}`,
           }),

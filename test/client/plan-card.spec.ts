@@ -3,7 +3,6 @@ import {
   degradedCardArgs,
   flattenCatalog,
   parseCardArgs,
-  resolveCurrentModel,
   serializeStepModels,
 } from '../../src/client/plan-card.ts'
 
@@ -37,28 +36,6 @@ describe('flattenCatalog', () => {
   })
   it('空 groups → 空数组', () => {
     expect(flattenCatalog({ ...catalog, groups: [] })).toEqual([])
-  })
-})
-
-describe('resolveCurrentModel', () => {
-  it('next 优先，其次 lastUsed，最后 catalog.default', () => {
-    expect(
-      resolveCurrentModel(catalog, {
-        next: { provider: 'n', model: 'm' },
-        lastUsed: { provider: 'l', model: 'u' },
-      }),
-    ).toEqual({ provider: 'n', model: 'm' })
-    expect(resolveCurrentModel(catalog, { lastUsed: { provider: 'l', model: 'u' } })).toEqual({
-      provider: 'l',
-      model: 'u',
-    })
-    expect(resolveCurrentModel(catalog, undefined)).toEqual(catalog.default)
-  })
-  it('宿主投影为 null 时回退 lastUsed / catalog.default', () => {
-    expect(
-      resolveCurrentModel(catalog, { next: null, lastUsed: { provider: 'l', model: 'u' } }),
-    ).toEqual({ provider: 'l', model: 'u' })
-    expect(resolveCurrentModel(catalog, { next: null, lastUsed: null })).toEqual(catalog.default)
   })
 })
 

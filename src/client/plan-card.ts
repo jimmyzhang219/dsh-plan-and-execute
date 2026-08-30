@@ -33,12 +33,6 @@ export interface ModelCatalogLike {
   }>
 }
 
-/** 会话模型选择投影（next ?? lastUsed 语义与宿主 ModelSelectionProjection 一致；null = 未设置）。 */
-export interface ModelSelectionProjectionLike {
-  readonly next?: { readonly provider: string; readonly model: string } | null
-  readonly lastUsed?: { readonly provider: string; readonly model: string } | null
-}
-
 /** 校验并解析 submit_plan 原始参数；形状不符返回 undefined。 */
 export function parseCardArgs(raw: unknown): CardArgs | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
@@ -96,14 +90,6 @@ export function flattenCatalog(catalog: ModelCatalogLike): ModelOption[] {
     }
   }
   return options
-}
-
-/** 当前会话模型：投影 next ?? lastUsed ?? 目录默认。 */
-export function resolveCurrentModel(
-  catalog: ModelCatalogLike,
-  projection: ModelSelectionProjectionLike | undefined,
-): { provider: string; model: string } {
-  return projection?.next ?? projection?.lastUsed ?? catalog.default
 }
 
 /** 选择值 → 命令载荷（provider|model 拼接值还原）。 */

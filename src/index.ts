@@ -347,7 +347,9 @@ export function apply(ctx: Context, config: Config): void {
           const parsedEntries = Object.keys(parsed).length
           const resolvedEntries = Object.keys(resolved).length
           if (parsedEntries > 0 && resolvedEntries === 0) {
-            ctx.logger.warn('plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）')
+            ctx.logger.warn(
+              'plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
+            )
             continue
           }
           const result = await orchestrator.applyStepModels(resolved)

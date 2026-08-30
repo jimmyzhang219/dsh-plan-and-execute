@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildSettingsPatch,
-  findLatestSubmitPlanArgs,
   isPlanReviewPending,
+  parsePlanDetail,
   questionView,
 } from '../../src/client/review-card.ts'
 
@@ -60,117 +60,33 @@ describe('buildSettingsPatch', () => {
   })
 })
 
-// —— findLatestSubmitPlanArgs：节点形状以宿主 ui-chat conversation-nodes 为准 ——
-// ChatNode<'tool-call'> = ChatConversationViewNode & { kind: 'tool-call', data: { root: ToolCallBlock } }；
-// ToolCallBlock = RunningToolCall（name/argsRaw 顶层）| ToolResultNode（call 回填 name/argsRaw）。
-
-/** running 形态 tool-call 节点（宿主 records.ts RunningToolCall）。 */
-function runningToolNode(callId: string, argsRaw: string) {
-  return {
-    kind: 'tool-call',
-    target: 'chat',
-    anchorSeq: 1,
-    location: { kind: 'step', turn: { turn: 1 }, step: { step: 1 } },
-    visibility: 'visible',
-    data: {
-      root: {
-        callId,
-        name: 'submit_plan',
-        argsRaw,
-        turn: 1,
-        step: 1,
-        time: 1,
-        subCalls: [],
-      },
-    },
-  }
-}
-
-/** settled 形态 tool-call 节点（宿主 records.ts ToolResultNode，call 回填）。 */
-function settledToolNode(callId: string, argsRaw: string) {
-  return {
-    kind: 'tool-call',
-    target: 'chat',
-    anchorSeq: 2,
-    location: { kind: 'step', turn: { turn: 1 }, step: { step: 1 } },
-    visibility: 'visible',
-    data: {
-      root: {
-        kind: 'tool-result',
-        seq: 2,
-        time: 2,
-        callId,
-        call: { name: 'submit_plan', argsRaw },
-        callTime: 1,
-        content: [],
-        isError: false,
-        subCalls: [],
-      },
-    },
-  }
-}
-
-/** 最小 chat 快照（ChatSnapshot.nodes.values() 面）。 */
-function chatOf(nodes: readonly unknown[]): unknown {
-  return { nodes: { values: () => nodes } }
-}
-
-describe('findLatestSubmitPlanArgs', () => {
-  it('running 形态命中：取最后一个 submit_plan 的 argsRaw 解析', () => {
-    const chat = chatOf([
-      { kind: 'user-message', target: 'chat', anchorSeq: 0, location: {}, visibility: 'visible' },
-      runningToolNode('c1', JSON.stringify({ planDir: '.pae/s1', steps: [{ file: 'a.md', title: 'A' }] })),
-      runningToolNode('c2', JSON.stringify({ planDir: '.pae/s2', steps: [{ file: 'b.md', title: 'B' }] })),
-    ])
-    expect(findLatestSubmitPlanArgs(chat)).toEqual({
-      planDir: '.pae/s2',
-      steps: [{ file: 'b.md', title: 'B' }],
+describe('parsePlanDetail', () => {
+  it('解析 planReviewDetail 格式（计划目录行 + N. title — file 行）', () => {
+    const detail = '计划目录：/tmp/x\n1. 计算 1+1 — step-01.md\n2. 计算 2+2 — step-02.md ⚠ 确认点'
+    expect(parsePlanDetail(detail)).toEqual({
+      planDir: '/tmp/x',
+      steps: [
+        { file: 'step-01.md', title: '计算 1+1' },
+        { file: 'step-02.md', title: '计算 2+2', requiresConfirmation: true },
+      ],
     })
   })
-  it('settled 形态命中（call 回填 name/argsRaw）', () => {
-    const chat = chatOf([
-      settledToolNode('c1', JSON.stringify({ planDir: '.pae/s1', steps: [{ file: 'a.md', title: 'A' }] })),
-    ])
-    expect(findLatestSubmitPlanArgs(chat)).toEqual({
-      planDir: '.pae/s1',
-      steps: [{ file: 'a.md', title: 'A' }],
+  it('标题含 " — " 时以最后一个分隔符解析', () => {
+    const detail = '计划目录：/tmp/x\n1. 拆分 — 合并 — step-01.md'
+    expect(parsePlanDetail(detail)).toEqual({
+      planDir: '/tmp/x',
+      steps: [{ file: 'step-01.md', title: '拆分 — 合并' }],
     })
   })
-  it('无 submit_plan 节点 → undefined', () => {
-    const chat = chatOf([
-      { kind: 'user-message', target: 'chat', anchorSeq: 0, location: {}, visibility: 'visible' },
-      { kind: 'tool-call', target: 'chat', anchorSeq: 1, location: {}, visibility: 'visible', data: { root: { callId: 'c1', name: 'bash', argsRaw: '{"command":"ls"}', turn: 1, step: 1, time: 1, subCalls: [] } } },
-    ])
-    expect(findLatestSubmitPlanArgs(chat)).toBeUndefined()
+  it('缺计划目录行 / 空 detail → undefined', () => {
+    expect(parsePlanDetail('')).toBeUndefined()
+    expect(parsePlanDetail('1. a — b.md')).toBeUndefined()
   })
-  it('chat 非对象 / nodes 缺 values → undefined', () => {
-    expect(findLatestSubmitPlanArgs(null)).toBeUndefined()
-    expect(findLatestSubmitPlanArgs('x')).toBeUndefined()
-    expect(findLatestSubmitPlanArgs({ nodes: {} })).toBeUndefined()
-  })
-  it('argsRaw 非 JSON → undefined', () => {
-    const chat = chatOf([runningToolNode('c1', 'not-json{')])
-    expect(findLatestSubmitPlanArgs(chat)).toBeUndefined()
-  })
-  it('非 tool-call 节点混入被跳过', () => {
-    const chat = chatOf([
-      { kind: 'assistant-message', target: 'chat', anchorSeq: 0, location: {}, visibility: 'visible' },
-      runningToolNode('c1', JSON.stringify({ planDir: '.pae/s1', steps: [{ file: 'a.md', title: 'A' }] })),
-    ])
-    expect(findLatestSubmitPlanArgs(chat)).toEqual({
-      planDir: '.pae/s1',
-      steps: [{ file: 'a.md', title: 'A' }],
-    })
-  })
-  it('subCalls 递归命中（遍历 conversation 树）', () => {
-    const parent = runningToolNode('c1', JSON.stringify({ command: 'run' }))
-    ;(parent.data.root as { subCalls: unknown[] }).subCalls = [
-      { callId: 'c1-1', name: 'submit_plan', argsRaw: JSON.stringify({ planDir: '.pae/s1', steps: [{ file: 'a.md', title: 'A' }] }), turn: 1, step: 1, time: 1, subCalls: [] },
-    ]
-    const chat = chatOf([parent])
-    expect(findLatestSubmitPlanArgs(chat)).toEqual({
-      planDir: '.pae/s1',
-      steps: [{ file: 'a.md', title: 'A' }],
+  it('非标准步骤行跳过（容错）', () => {
+    const detail = '计划目录：/tmp/x\n垃圾行\n1. a — b.md'
+    expect(parsePlanDetail(detail)).toEqual({
+      planDir: '/tmp/x',
+      steps: [{ file: 'b.md', title: 'a' }],
     })
   })
 })
