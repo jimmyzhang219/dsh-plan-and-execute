@@ -189,9 +189,13 @@ export class Orchestrator {
 
   /** 当前内存态快照（只读；prompt section 等同步读取用）。 */
   snapshot(): {
+    /** 当前阶段；'none' 表示尚未开始。 */
     phase: PaePhase | 'none'
+    /** 计划目录。 */
     planDir?: string
+    /** 当前步骤号（1-based）。 */
     stepIndex?: number
+    /** 步骤指令注入次数（含 retry 重注入；单调递增）。 */
     stepAttempt: number
   } {
     return {
