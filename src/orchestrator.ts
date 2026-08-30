@@ -430,7 +430,7 @@ export class Orchestrator {
           `步骤文件校验失败：${check.issues[0]?.problem ?? '文件不可用'}`,
         )
         if (choice === 'terminate') return this.finish('aborted', plan)
-        if (choice === 'replan') return this.enterReplan(plan, choice)
+        if (choice === 'replan') return this.enterReplan(plan)
         if (choice === 'skip' || choice === 'next') {
           if (choice === 'skip') this.state.skipped.add(i)
           i += 1
@@ -451,7 +451,7 @@ export class Orchestrator {
           recoveries = 0
           continue
         }
-        if (choice === 'replan') return this.enterReplan(plan, choice)
+        if (choice === 'replan') return this.enterReplan(plan)
         if (choice === 'terminate') return this.finish('aborted', plan)
         // continue → 落到下方 executing
       }
@@ -482,7 +482,7 @@ export class Orchestrator {
             `第 ${i}/${total} 步（${step.title}）未完成（${outcome}）`,
           )
           if (choice === 'terminate') return this.finish('aborted', plan)
-          if (choice === 'replan') return this.enterReplan(plan, choice)
+          if (choice === 'replan') return this.enterReplan(plan)
           if (choice === 'skip') {
             this.state.skipped.add(i)
             break
@@ -554,7 +554,7 @@ export class Orchestrator {
   }
 
   /** 回到规划阶段：清计划、注入 replan 指令（携带最近反馈）、重新挂起审批。 */
-  private async enterReplan(plan: PaePlanPayload, _feedback: string): Promise<void> {
+  private async enterReplan(plan: PaePlanPayload): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
     this.state.stepModels.clear()
@@ -618,13 +618,13 @@ export class Orchestrator {
           this.state.skipped.add(i)
           return this.run(plan, i + 1)
         }
-        if (choice === 'replan') return this.enterReplan(plan, '')
+        if (choice === 'replan') return this.enterReplan(plan)
         if (choice === 'terminate') return this.finish('aborted', plan)
         return this.run(plan, i)
       }
       const choice = await this.pause(reason, i, plan, '编排恢复：请决定如何继续')
       if (choice === 'terminate') return this.finish('aborted', plan)
-      if (choice === 'replan') return this.enterReplan(plan, choice)
+      if (choice === 'replan') return this.enterReplan(plan)
       if (choice === 'skip') {
         this.state.skipped.add(i)
         return this.run(plan, i + 1)
@@ -655,7 +655,7 @@ export class Orchestrator {
       if (answer === 'dismissed') return
       const label = answer.answers.find((entry) => entry.id === 'pae-resume')?.selected[0]
       if (label === '从断点继续') return this.run(plan, i)
-      if (label === PAUSE_REPLAN) return this.enterReplan(plan, '')
+      if (label === PAUSE_REPLAN) return this.enterReplan(plan)
       if (label === PAUSE_TERMINATE) return this.finish('aborted', plan)
       return
     }
