@@ -24,13 +24,13 @@ describe('submit_plan 工具', () => {
       run(tool, { planDir: '<测试目录>', steps: [{ file: 'a.md', title: 'A' }] }),
     ).resolves.toEqual({ approved: true })
   })
-  it('驳回 → 抛出反馈文本（模型看到反馈）', async () => {
+  it('驳回/搁置 → 正常返回 { approved: false, feedback }（不抛错，消息流不显示红色 Error）', async () => {
     const tool = createSubmitPlanTool(
       () => ({ submitPlan: async () => ({ approved: false, error: '用户反馈：X' }) }) as never,
     )
     await expect(
       run(tool, { planDir: '<测试目录>', steps: [{ file: 'a.md', title: 'A' }] }),
-    ).rejects.toThrow('用户反馈：X')
+    ).resolves.toEqual({ approved: false, feedback: '用户反馈：X' })
   })
 })
 

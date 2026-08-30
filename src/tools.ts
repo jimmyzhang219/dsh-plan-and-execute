@@ -19,7 +19,7 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
     description:
       'Plan-and-Execute 规划阶段专用：提交步骤清单供用户审批。' +
       'steps[].file 是相对计划目录的步骤 Markdown 文件名（先写好文件再提交）。' +
-      '用户驳回时错误信息携带反馈，按反馈修改后重新提交。',
+      '用户驳回/搁置时返回 approved:false 且 feedback 字段携带用户反馈，按反馈修改后重新提交。',
     parameters: {
       planDir: {
         type: 'string',
@@ -53,14 +53,17 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        properties: { approved: { type: 'boolean', required: true } },
+        properties: {
+          approved: { type: 'boolean', required: true },
+          feedback: { type: 'string', description: '未批准原因（用户驳回反馈或搁置说明）' },
+        },
       } as const,
       render: (_args, value) => [
         {
           type: 'text',
           text: value.approved
             ? '计划已批准。编排器将逐步注入步骤指令；请结束当前回合，等待第一步指令。'
-            : '计划未获批准。',
+            : `计划未获批准。${value.feedback === undefined ? '' : `\n${value.feedback}`}`,
         },
       ],
     },
@@ -71,7 +74,8 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
         throw new Error('当前会话没有进行中的 plan-and-execute 编排')
       }
       const verdict = await orchestrator.submitPlan(args.planDir, args.steps, args.summary)
-      if (!verdict.approved) throw new Error(verdict.error)
+      // 驳回/搁置是正常流程：以 approved:false + feedback 返回（不抛错，避免消息流红色 Error）
+      if (!verdict.approved) return { approved: false, feedback: verdict.error }
       return { approved: true }
     },
     presentCall: (args) => ({
