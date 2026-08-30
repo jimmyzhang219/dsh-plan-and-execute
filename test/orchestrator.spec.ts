@@ -87,6 +87,13 @@ describe('主执行路径', () => {
       1,
       1,
     )
+    // 串行推进：step 1 完成即标记 completed（此前保持 in_progress 直到 finish 统一置位）
+    await vi.waitFor(() => {
+      expect(agent.session.todosWrites.at(-1)).toEqual([
+        { content: '1. A', status: 'completed' },
+        { content: '2. B', status: 'in_progress' },
+      ])
+    })
     await orchestratorTurn(
       orchestrator,
       agent,

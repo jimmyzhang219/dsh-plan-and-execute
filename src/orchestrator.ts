@@ -505,6 +505,10 @@ export class Orchestrator {
         outcome = await this.settle(i)
         action = decideAction(outcome, { nudged, recoveries, policy: this.deps.config })
       }
+      // 正常推进（advance：模型自报 done）即标记本步完成——此前只有暂停弹窗的
+      // "继续下一步"分支标记，导致串行执行时已完成步保持 in_progress 直到 finish()。
+      // skip 路径已 break 跳出且 action 非 advance，保持 pending 不被误标。
+      if (action.kind === 'advance') this.mark(i, 'completed', plan)
       i += 1
       nudged = false
       recoveries = 0
