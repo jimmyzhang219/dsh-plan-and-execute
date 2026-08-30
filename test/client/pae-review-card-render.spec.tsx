@@ -195,9 +195,10 @@ describe('PaeReviewCardView', () => {
       // 宿主 update 返回 RemoteResult<SettingsNamespaceView>（ok: true 判别联合，视图不消费结果值；
       // SettingsNamespaceView 必填字段多（ns/schema/value/applies/secrets/revision），mock 用
       // as never 占位，避免为未使用的形状追完整类型）。
-      update: vi.fn(
-        async (): Promise<{ ok: true; value: never }> => ({ ok: true, value: {} as never }),
-      ),
+      update: vi.fn(async (): Promise<{ ok: true; value: never }> => ({
+        ok: true,
+        value: {} as never,
+      })),
     },
     connection: { isLoopback: true },
   }
