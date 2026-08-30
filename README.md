@@ -16,6 +16,10 @@ dsh 的 Plan-and-Execute 编排插件：`/plan-and-execute <任务>` 启动"规�
 
 ## 开发
 
+> 本插件基于 dsh **0.1.2-alpha.1**（本地 checkout `~/git/deepseek-harness`）开发调试。
+> 注意：npm 上的宿主发布版（0.1.1-rc.2）缺少 `canOpenWorkspacePath` 等 client API，
+> 审批卡"打开目录"按钮在该宿主下不可用——请使用本地 checkout 或等待新版宿主发布。
+
 ```sh
 pnpm install && pnpm link:host   # link:host 软链宿主包（DSH_ROOT 默认 ~/git/deepseek-harness，需先在 dsh 仓库 pnpm install && pnpm run build）
 pnpm test             # vitest 单测
@@ -33,12 +37,24 @@ pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝�
 
 ## 正式安装
 
+**方式一：npm 包直接安装（无需构建）**
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
+```
+
+**方式二：从源码构建安装**
+
 ```sh
 git clone https://github.com/jimmyzhang219/dsh-plan-and-execute.git
 cd dsh-plan-and-execute
 pnpm install && pnpm build
 dsh plugin --profile <name> add .
 ```
+
+> 宿主版本匹配：npm 上 `@deepseek-ai/dsh` 当前为 0.1.1-rc.2，缺少 `canOpenWorkspacePath`
+> 等 client API，审批卡"打开目录"按钮不可用；用本地 checkout（0.1.2-alpha.1）启动
+> （`cd ~/git/deepseek-harness && pnpm dsh web`）可立即获得完整功能。
 
 ## 手工验收清单（`pnpm dev` + Web UI）
 
