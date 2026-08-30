@@ -4,11 +4,7 @@
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import {
-  PAE_PLUGIN,
-  type PaePlanPayload,
-  type PlanStep,
-} from './state.ts'
+import { PAE_PLUGIN, type PaePlanPayload, type PlanStep } from './state.ts'
 
 /** 构造插件注入消息：source.kind='plugin'（不参与 dsh 用户消息语义，如自动标题派生）。 */
 function instruction(text: string, summary: string): UserMessage {
