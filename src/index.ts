@@ -23,7 +23,7 @@ import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator
 import { PAE_MODELS_NS, PAE_MODELS_SCHEMA, parsePaeModels } from './settings.ts'
 import { fileStorage } from './persist.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
-import { isPlanModeActive, type PaeStepModel } from './state.ts'
+import { isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
 
 /** 插件名（命令名、编排目录命名空间）。 */
@@ -225,76 +225,6 @@ export function apply(ctx: Context, config: Config): void {
           kind: 'success',
           text: 'Plan-and-Execute 已启动：进入规划阶段，等待模型提交计划。',
         }
-      },
-    })
-    commandCtx.commands.register({
-      name: 'plan-and-execute-set-models',
-      description:
-        'Plan-and-Execute：设置各步骤执行模型（Web UI 步骤卡片调用）。' +
-        '载荷为 JSON：{"1":{"provider":"...","model":"..."}}（步骤号 1-based）；' +
-        '空载荷 {} 会清空全部步骤的模型选择（恢复为会话当前模型）。',
-      input: { hint: '<json>' },
-      handler: async ({ agent, rawInput }) => {
-        const orchestrator = lookup(agent.session as object)
-        if (orchestrator === undefined) {
-          return { kind: 'error', text: '当前会话没有 plan-and-execute 编排' }
-        }
-        // ctx.get 的泛型重载约束为 Context 服务名，外部服务名须用 as 断言形状
-        const llm = ctx.get('llm') as
-          | {
-              resolveCallConfig: (c: {
-                provider: string
-                model: string
-              }) => Promise<{ provider: string; model: string; reasoningEffort?: string }>
-            }
-          | undefined
-        if (llm === undefined) return { kind: 'error', text: '当前部署没有 llm 服务，无法校验模型' }
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(rawInput.trim())
-        } catch {
-          return { kind: 'error', text: '载荷不是合法 JSON' }
-        }
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-          return { kind: 'error', text: '载荷必须是 {步骤号: {provider, model}} 对象' }
-        }
-        const models: Record<number, PaeStepModel> = {}
-        for (const [key, value] of Object.entries(parsed)) {
-          const index = Number(key)
-          const v = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
-          if (
-            !Number.isInteger(index) ||
-            typeof v?.provider !== 'string' ||
-            typeof v?.model !== 'string'
-          ) {
-            return { kind: 'error', text: `第 ${key} 项缺少 provider/model 字符串字段` }
-          }
-          let resolved: { provider: string; model: string; reasoningEffort?: string }
-          try {
-            resolved = await llm.resolveCallConfig({ provider: v.provider, model: v.model })
-          } catch (error) {
-            return {
-              kind: 'error',
-              text: `模型 ${v.provider}/${v.model} 不可用：${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            }
-          }
-          models[index] = {
-            provider: resolved.provider,
-            model: resolved.model,
-            ...(resolved.reasoningEffort === undefined
-              ? {}
-              : { reasoningEffort: resolved.reasoningEffort }),
-            ...(typeof v.reasoningEffort === 'string'
-              ? { reasoningEffort: v.reasoningEffort }
-              : {}),
-          }
-        }
-        const result = await orchestrator.applyStepModels(models)
-        return result.ok
-          ? { kind: 'success', text: `已设置 ${Object.keys(models).length} 个步骤的模型` }
-          : { kind: 'error', text: result.error }
       },
     })
   })

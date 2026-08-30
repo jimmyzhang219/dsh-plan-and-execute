@@ -145,15 +145,18 @@ async function fireCreated(
   })
 }
 
+/** 取 settings/updated 桥接监听器（命令已删除，桥接是唯一写路径）。 */
+function settingsListenerOf(ctx: ReturnType<typeof fakeCtx>) {
+  return ctx.listeners.find((l) => l.event === 'settings/updated')?.handler as
+    ((ns: string, next: unknown, prev: unknown, source: string) => Promise<unknown>) | undefined
+}
+
 describe('apply 装配', () => {
   it('注册命令、两个工具、两个 prompt section、agent/created 监听', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    expect(ctx.registered.commands.map((c) => c.name)).toEqual([
-      'plan-and-execute',
-      'plan-and-execute-set-models',
-    ])
+    expect(ctx.registered.commands.map((c) => c.name)).toEqual(['plan-and-execute'])
     expect(ctx.registered.tools).toHaveLength(2)
     expect(ctx.registered.sections.map((s) => (s as { name: string }).name)).toEqual([
       'pae:planning',
@@ -331,70 +334,6 @@ describe('apply 装配', () => {
   })
 })
 
-describe('plan-and-execute-set-models 命令', () => {
-  it('合法载荷 → 经 llm 校验后写入编排器（seedState planning + plan）', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    const handler = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    await seedState('planning', {
-      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
-    })
-    const agent = fakeAgent('planning')
-    await fireCreated(ctx, agent)
-    const result = await handler({
-      agent,
-      rawInput: '{"1":{"provider":"deepseek-official","model":"deepseek-v4-flash"}}',
-    })
-    expect(result).toMatchObject({ kind: 'success' })
-    expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({
-      provider: 'deepseek-official',
-      model: 'deepseek-v4-flash',
-    })
-  })
-
-  it('坏 JSON / 非对象 / 缺 provider-model → error，不落盘', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    const handler = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    await seedState('planning')
-    const agent = fakeAgent('planning')
-    await fireCreated(ctx, agent)
-    for (const rawInput of ['x', '[1]', '{"1":{"provider":"a"}}']) {
-      const result = await handler({ agent, rawInput })
-      expect(result).toMatchObject({ kind: 'error' })
-    }
-    const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
-    expect(JSON.parse(raw)).not.toHaveProperty('stepModels')
-  })
-
-  it('llm 校验抛错 → error 带模型不可用', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    const handler = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    await seedState('planning')
-    const agent = fakeAgent('planning')
-    ctx.llm.resolveCallConfig.mockRejectedValueOnce(new Error('unknown model'))
-    await fireCreated(ctx, agent)
-    const result = await handler({
-      agent,
-      rawInput: '{"1":{"provider":"deepseek-official","model":"deepseek-v4-flash"}}',
-    })
-    expect(result).toMatchObject({
-      kind: 'error',
-      text: expect.stringContaining('模型 deepseek-official/deepseek-v4-flash 不可用'),
-    })
-  })
-})
-
 describe('agent/request waterfall 按步切换模型', () => {
   /** 取 fireCreated 后 ensure 注册的 'agent/request' waterfall handler。 */
   function requestHandlerOf(agent: ReturnType<typeof fakeAgent>) {
@@ -421,11 +360,13 @@ describe('agent/request waterfall 按步切换模型', () => {
     await fireCreated(ctx, agent)
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
-    const command = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    const applied = await command({ agent, rawInput: '{"1":{"provider":"p1","model":"m1"}}' })
-    expect(applied).toMatchObject({ kind: 'success' })
+    // 经 settings/updated 桥接喂入映射（命令已删除，桥接是唯一写路径）
+    await settingsListenerOf(ctx)!(
+      'pae-step-models',
+      { 'sess-1': { 1: { provider: 'p1', model: 'm1' } } },
+      {},
+      'user',
+    )
     await expect(
       requestHandler!({}, async () => ({ provider: 's', model: 'm', maxTokens: 100 })),
     ).resolves.toEqual({ provider: 'p1', model: 'm1', maxTokens: 100 })
@@ -449,11 +390,13 @@ describe('agent/request waterfall 按步切换模型', () => {
     await fireCreated(ctx, agent)
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
-    const command = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    const applied = await command({ agent, rawInput: '{"2":{"provider":"p2","model":"m2"}}' })
-    expect(applied).toMatchObject({ kind: 'success' })
+    // 步骤 2 的映射不影响步骤 1 的请求（透传）
+    await settingsListenerOf(ctx)!(
+      'pae-step-models',
+      { 'sess-1': { 2: { provider: 'p2', model: 'm2' } } },
+      {},
+      'user',
+    )
     await expect(
       requestHandler!({}, async () => ({ provider: 's', model: 'm', maxTokens: 100 })),
     ).resolves.toEqual({ provider: 's', model: 'm', maxTokens: 100 })
@@ -477,11 +420,14 @@ describe('agent/request waterfall 按步切换模型', () => {
     await fireCreated(ctx, agent)
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
-    const command = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    const applied = await command({ agent, rawInput: '{"1":{"provider":"p1","model":"m1"}}' })
-    expect(applied).toMatchObject({ kind: 'success' })
+    // 经 settings/updated 桥接喂入映射（命令已删除，桥接是唯一写路径）
+    const listener = settingsListenerOf(ctx)!
+    await listener(
+      'pae-step-models',
+      { 'sess-1': { 1: { provider: 'p1', model: 'm1' } } },
+      {},
+      'user',
+    )
     const returned = await requestHandler!({}, async () => ({
       provider: 's',
       model: 'm',
@@ -491,40 +437,6 @@ describe('agent/request waterfall 按步切换模型', () => {
     expect(returned.model).toBe('m1')
     // 映射不带 effort → 继承的 effort 必须被删除（否则不支持的组合会在 prepareCall 抛错）
     expect('reasoningEffort' in returned).toBe(false)
-  })
-
-  it('映射带 effort → 覆盖 seed（seed 的 high 被剥离、映射的 low 生效）', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    await seedState('executing', {
-      stepIndex: 1,
-      plan: {
-        planDir: join(cwd, '.pae', 'sess-1'),
-        steps: [
-          { file: 'a.md', title: 'A' },
-          { file: 'b.md', title: 'B' },
-        ],
-      },
-    })
-    const agent = fakeAgent('executing')
-    await fireCreated(ctx, agent)
-    const requestHandler = requestHandlerOf(agent)
-    expect(requestHandler).toBeDefined()
-    const command = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    const applied = await command({
-      agent,
-      rawInput: '{"1":{"provider":"p1","model":"m1","reasoningEffort":"low"}}',
-    })
-    expect(applied).toMatchObject({ kind: 'success' })
-    const returned = await requestHandler!({}, async () => ({
-      provider: 's',
-      model: 'm',
-      reasoningEffort: 'high' as LlmCallConfig['reasoningEffort'],
-    }))
-    expect(returned.reasoningEffort).toBe('low')
   })
 
   it('无映射 → 透传原样（含 seed 的 reasoningEffort）', async () => {
@@ -545,11 +457,14 @@ describe('agent/request waterfall 按步切换模型', () => {
     await fireCreated(ctx, agent)
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
-    const command = ctx.registered.commands[1]!.handler as (
-      invocation: Record<string, unknown>,
-    ) => Promise<unknown>
-    const applied = await command({ agent, rawInput: '{"2":{"provider":"p2","model":"m2"}}' })
-    expect(applied).toMatchObject({ kind: 'success' })
+    // 步骤 2 的映射不影响步骤 1 的请求（透传）
+    const listener = settingsListenerOf(ctx)!
+    await listener(
+      'pae-step-models',
+      { 'sess-1': { 2: { provider: 'p2', model: 'm2' } } },
+      {},
+      'user',
+    )
     const returned = await requestHandler!({}, async () => ({
       provider: 's',
       model: 'm',
@@ -562,12 +477,6 @@ describe('agent/request waterfall 按步切换模型', () => {
 })
 
 describe('settings/updated 桥接', () => {
-  /** 取 apply 注册的 settings/updated 监听器（桥接未实现时为 undefined）。 */
-  function settingsListenerOf(ctx: ReturnType<typeof fakeCtx>) {
-    return ctx.listeners.find((l) => l.event === 'settings/updated')?.handler as
-      ((ns: string, next: unknown, prev: unknown, source: string) => void) | undefined
-  }
-
   it('本命名空间变更 → 解析校验后 applyStepModels（按 sessionId 定位编排器）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
@@ -577,7 +486,7 @@ describe('settings/updated 桥接', () => {
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)
+    const listener = settingsListenerOf(ctx)!
     expect(listener).toBeDefined()
     listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
     await vi.waitFor(async () => {
@@ -596,7 +505,7 @@ describe('settings/updated 桥接', () => {
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)
+    const listener = settingsListenerOf(ctx)!
     expect(listener).toBeDefined()
     listener!('other-ns', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
     expect(ctx.llm.resolveCallConfig).not.toHaveBeenCalled()
@@ -619,7 +528,7 @@ describe('settings/updated 桥接', () => {
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)
+    const listener = settingsListenerOf(ctx)!
     expect(listener).toBeDefined()
     listener!(
       'pae-step-models',
@@ -643,7 +552,7 @@ describe('settings/updated 桥接', () => {
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)
+    const listener = settingsListenerOf(ctx)!
     expect(listener).toBeDefined()
     // 目录只读 → save 的 writeFile 抛 EACCES → applyStepModels 抛出 → IIFE 拒绝
     await chmod(join(cwd, '.pae', 'sess-1'), 0o500)
@@ -671,7 +580,7 @@ describe('settings/updated 桥接', () => {
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)
+    const listener = settingsListenerOf(ctx)!
     expect(listener).toBeDefined()
     ctx.llm.resolveCallConfig.mockRejectedValue(new Error('unknown model'))
     await listener!(
