@@ -23,6 +23,30 @@ const checks = [
   ['包含 id: "plan-and-execute"', body.includes('id: "plan-and-execute"')],
   ['以 return module.exports; }); 收尾', /return module\.exports;\s*\}\s*\}\);?$/.test(body)],
 ]
+// 运行时 require 只允许平台种子词：client 代码若值导入宿主模块（如 schemastery），
+// tsup 会把 peerDeps 标 external 发出 require，浏览器模块表缺失即加载崩溃。
+const seedWords = new Set([
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives',
+])
+const requires = [...body.matchAll(/require\("([^"]+)"\)/g)].map((match) => match[1])
+const strayRequires = [...new Set(requires.filter((spec) => !seedWords.has(spec)))]
+if (strayRequires.length > 0) {
+  console.error(
+    `[assert-client-wrapper] FAIL：bundle 含非种子词运行时 require：${strayRequires.join(', ')}`,
+  )
+  console.error(
+    '[assert-client-wrapper] client 代码值导入了宿主模块（tsup 将 peerDeps 标 external），' +
+      '浏览器模块表缺失即崩。共享常量请放 state.ts 等无运行时依赖的模块，宿主依赖留在宿主侧。',
+  )
+  process.exit(1)
+}
 const failed = checks.filter(([, ok]) => !ok)
 if (failed.length > 0) {
   for (const [name] of failed) console.error(`[assert-client-wrapper] FAIL：${name}`)

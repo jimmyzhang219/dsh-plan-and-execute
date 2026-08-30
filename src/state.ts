@@ -9,9 +9,18 @@
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 /** 插件标识（消息 source.plugin、编排目录命名空间）。 */
 export const PAE_PLUGIN = 'plan-and-execute'
+
+/**
+ * 每步模型选择的 settings 命名空间名（全局用户配置，按 sessionId 分键）。
+ * 定义在本文件（无运行时依赖）：宿主 settings.ts 与 client half 都引用它，
+ * 放在带 schemastery 值导入的 settings.ts 会把该依赖拖进浏览器 bundle。
+ * 品牌类型仅 type-only 导入（构建时擦除），不产生运行时 require。
+ */
+export const PAE_MODELS_NS = 'pae-step-models' as SettingsNamespace
 
 /** 编排阶段：planning（规划）→ executing（执行，可暂停）→ completed/aborted（终态）。 */
 export type PaePhase = 'planning' | 'executing' | 'paused' | 'completed' | 'aborted'

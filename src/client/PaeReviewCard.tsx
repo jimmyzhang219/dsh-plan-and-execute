@@ -17,7 +17,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import { flattenCatalog, resolveCurrentModel } from './plan-card.ts'
 import { optionKey } from './PlanCard.tsx'
-import { PAE_MODELS_NS } from '../settings.ts'
+import { PAE_MODELS_NS } from '../state.ts'
 import { buildSettingsPatch, findLatestSubmitPlanArgs, isPlanReviewPending, questionView, type PlanReviewPendingLike } from './review-card.ts'
 import type { NS } from './locale.ts'
 

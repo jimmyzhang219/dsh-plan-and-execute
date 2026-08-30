@@ -5,11 +5,12 @@
  * @module plan-and-execute/settings
  */
 import Schema from '@deepseek-ai/schemastery'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { PaeStepModel } from './state.ts'
 
-/** settings 命名空间名（全局用户配置，按 sessionId 分键）。 */
-export const PAE_MODELS_NS = 'pae-step-models' as SettingsNamespace
+// PAE_MODELS_NS 定义在 state.ts（无运行时依赖）：client half 也引用它，
+// 若定义在本文件会把 schemastery 值导入拖进浏览器 bundle（tsup 将
+// peerDeps 标 external → 运行时 require 在模块表缺失即崩）。
+export { PAE_MODELS_NS } from './state.ts'
 
 /** 命名空间 schema：sessionId → 步骤号(数字字符串) → {provider, model}。 */
 export const PAE_MODELS_SCHEMA = Schema.dict(
