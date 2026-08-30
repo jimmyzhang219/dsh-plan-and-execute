@@ -4,3 +4,6 @@ lib/
 ClassDiagram.liveclass
 .claude/skills/
 docs/
+
+# 本机专属，不追踪
+CLAUDE.md
