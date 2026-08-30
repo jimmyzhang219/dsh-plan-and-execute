@@ -53,8 +53,6 @@ export interface PaeStepModel {
   readonly provider: string
   /** provider 拥有的模型 id。 */
   readonly model: string
-  /** adapter 持有的 reasoning effort（可缺省）。 */
-  readonly reasoningEffort?: string
 }
 
 /** report_step 的单步汇报载荷（内存态；不写会话日志）。 */
