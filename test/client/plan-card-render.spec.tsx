@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PlanCard } from '../../src/client/PlanCard.tsx'
-import type { CardArgs, ModelOption } from '../../src/client/plan-card.ts'
+import type { CardArgs } from '../../src/client/plan-card.ts'
 
 // vitest 未开 globals，@testing-library/react 的自动 cleanup 不会挂载：显式清理避免跨用例 DOM 累积。
 afterEach(cleanup)
@@ -15,27 +15,11 @@ const args: CardArgs = {
     { file: 'b.md', title: '步骤 B', requiresConfirmation: true },
   ],
 }
-const options: ModelOption[] = [
-  {
-    provider: 'deepseek-official',
-    model: 'deepseek-v4-flash',
-    label: 'deepseek-official · deepseek-v4-flash',
-  },
-  {
-    provider: 'deepseek-official',
-    model: 'deepseek-v4-pro',
-    label: 'deepseek-official · deepseek-v4-pro',
-  },
-]
-const current = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
 
 const base = {
   args,
   canOpen: true,
-  options,
-  current,
   openFile: vi.fn(),
-  onSubmit: vi.fn(async () => {}),
   t: (key: string) => key,
 }
 
@@ -59,47 +43,9 @@ describe('PlanCard', () => {
     expect(screen.getByText('.pae/sess-1')).toBeTruthy()
   })
 
-  it('下拉默认 = 当前会话模型', () => {
+  it('简化后：无下拉与应用按钮（模型选择唯一入口 = 审批卡）', () => {
     render(<PlanCard {...base} />)
-    const selects = screen.getAllByRole('combobox')
-    expect(selects).toHaveLength(2)
-    expect((selects[0] as HTMLSelectElement).value).toBe('deepseek-official|deepseek-v4-flash')
-  })
-
-  it('修改下拉并点「应用模型」→ onSubmit 收到 {步骤号: {provider, model}}', async () => {
-    render(<PlanCard {...base} />)
-    fireEvent.change(screen.getAllByRole('combobox')[0]!, {
-      target: { value: 'deepseek-official|deepseek-v4-pro' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'applyModels' }))
-    await vi.waitFor(() => {
-      expect(base.onSubmit).toHaveBeenCalledWith({
-        1: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
-        2: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
-      })
-    })
-  })
-
-  it('未修改时「应用模型」禁用', () => {
-    render(<PlanCard {...base} />)
-    expect(
-      (screen.getByRole('button', { name: 'applyModels' }) as HTMLButtonElement).disabled,
-    ).toBe(true)
-  })
-
-  it('apply 失败（onSubmit reject）→ 按钮下方显示错误文本，不置 applied', async () => {
-    const onSubmit = vi.fn(async () => {
-      throw new Error('prompt 被拒')
-    })
-    render(<PlanCard {...base} onSubmit={onSubmit} />)
-    fireEvent.change(screen.getAllByRole('combobox')[0]!, {
-      target: { value: 'deepseek-official|deepseek-v4-pro' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'applyModels' }))
-    await screen.findByText('应用失败：prompt 被拒')
-    expect(onSubmit).toHaveBeenCalled()
-    // 不置 applied：按钮仍显示「应用模型选择」
-    expect(screen.getByRole('button', { name: 'applyModels' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'applied' })).toBeNull()
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'applyModels' })).toBeNull()
   })
 })

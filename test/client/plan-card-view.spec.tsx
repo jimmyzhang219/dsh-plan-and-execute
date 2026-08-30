@@ -1,14 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { ModelCatalog } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   SubmitPlanCardView,
   type SessionRemoteLike,
   type SubmitPlanCardViewProps,
 } from '../../src/client/PlanCard.tsx'
-import { buildSetModelsPrompt } from '../../src/client/plan-card.ts'
 
 // vitest 未开 globals：显式 cleanup 避免跨用例 DOM 累积（与 plan-card-render.spec.tsx 一致）。
 afterEach(cleanup)
@@ -20,22 +18,6 @@ const planArgs = {
     { file: 'a.md', title: '步骤 A' },
     { file: 'b.md', title: '步骤 B' },
   ],
-}
-
-const catalog: ModelCatalog = {
-  default: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
-  routableProviders: ['deepseek-official'],
-  groups: [
-    {
-      id: 'deepseek-official',
-      name: 'DeepSeek Official',
-      models: [
-        { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
-        { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' },
-      ],
-    },
-  ],
-  failures: [],
 }
 
 type Block = SubmitPlanCardViewProps['block']
@@ -68,10 +50,12 @@ function settledBlock(args: unknown): Block {
   }
 }
 
+/** prompt 侦听 mock：view 契约不含 prompt（简化后不再发消息），侦听器用于「未被调用」断言。 */
+type SessionRemoteMock = SessionRemoteLike & { readonly prompt: ReturnType<typeof vi.fn> }
+
 /** 最小 session 远端面 mock（SessionRemoteLike 契约，无需 as 绕过）。 */
-function makeSessionRemote(): SessionRemoteLike {
+function makeSessionRemote(): SessionRemoteMock {
   return {
-    modelCatalog: vi.fn(async () => ({ ok: true as const, value: catalog })),
     canOpenWorkspacePath: vi.fn(async () => ({ ok: true as const, value: true })),
     prompt: vi.fn(async () => ({ ok: true as const, value: { accepted: true as const } })),
   }
@@ -107,16 +91,13 @@ function makeProps(overrides: Partial<SubmitPlanCardViewProps> = {}): SubmitPlan
 }
 
 describe('SubmitPlanCardView', () => {
-  it('running block（顶层 argsRaw）→ 卡片渲染，默认模型 = catalog.default，打开目录走 owner openFile', async () => {
+  it('running block（顶层 argsRaw）→ 卡片渲染步骤，打开目录走 owner openFile', async () => {
     const openFile = vi.fn()
     const sessionRemote = makeSessionRemote()
     render(<SubmitPlanCardView {...makeProps({ openFile, sessionRemote })} />)
     await screen.findByText(/步骤 A/)
     expect(screen.getByText(/步骤 B/)).toBeTruthy()
     expect(screen.getByText('a.md')).toBeTruthy()
-    expect((screen.getAllByRole('combobox')[0] as HTMLSelectElement).value).toBe(
-      'deepseek-official|deepseek-v4-flash',
-    )
     fireEvent.click(screen.getByRole('button', { name: 'openDir' }))
     expect(openFile).toHaveBeenCalledWith('.pae/sess-9')
     expect(sessionRemote.canOpenWorkspacePath).toHaveBeenCalled()
@@ -128,43 +109,26 @@ describe('SubmitPlanCardView', () => {
     expect(screen.getByText(/步骤 B/)).toBeTruthy()
   })
 
-  it('modelCatalog 失败 → modelUnavailable 降级渲染（不白屏）', async () => {
+  it('canOpenWorkspacePath reject → 卡片仍渲染步骤、无打开按钮（不白屏）', async () => {
     const sessionRemote = makeSessionRemote()
-    sessionRemote.modelCatalog = vi.fn(async () => ({
-      ok: false as const,
-      error: { code: 'catalog-boom', message: 'catalog down', details: {} },
-    }))
+    sessionRemote.canOpenWorkspacePath = vi.fn(async () => {
+      throw new Error('rpc boom')
+    })
     render(<SubmitPlanCardView {...makeProps({ sessionRemote })} />)
-    await screen.findByText('modelUnavailable')
-    expect(screen.getByText('.pae/sess-9')).toBeTruthy()
-    expect(screen.queryByRole('combobox')).toBeNull()
+    await screen.findByText(/步骤 A/)
+    expect(screen.getByText(/步骤 B/)).toBeTruthy()
+    expect(screen.queryByText('modelUnavailable')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'openDir' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'openFile' })).toBeNull()
   })
 
-  it('点「应用模型」→ sessionRemote.prompt 收到 set-models 命令载荷（queue/text）', async () => {
+  it('简化后：无应用按钮，不调用 sessionRemote.prompt（模型选择唯一入口 = 审批卡）', async () => {
     const sessionRemote = makeSessionRemote()
     render(<SubmitPlanCardView {...makeProps({ sessionRemote })} />)
     await screen.findByText(/步骤 A/)
-    fireEvent.change(screen.getAllByRole('combobox')[0]!, {
-      target: { value: 'deepseek-official|deepseek-v4-pro' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'applyModels' }))
-    await vi.waitFor(() => {
-      expect(sessionRemote.prompt).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: 'sess-1',
-          mode: 'queue',
-          content: [
-            {
-              type: 'text',
-              text: buildSetModelsPrompt({
-                1: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
-                2: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
-              }),
-            },
-          ],
-        }),
-      )
-    })
+    expect(screen.queryByRole('button', { name: 'applyModels' })).toBeNull()
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+    expect(sessionRemote.prompt).not.toHaveBeenCalled()
   })
 
   it('connection 非 loopback → 无打开按钮（只显示路径文本）', async () => {
@@ -180,7 +144,6 @@ describe('SubmitPlanCardView', () => {
     await screen.findByText(/步骤 A/)
     expect(screen.getByText(/步骤 B/)).toBeTruthy()
     expect(screen.getByText('a.md')).toBeTruthy()
-    expect(screen.getAllByRole('combobox')).toHaveLength(2)
     // 缺 planDir → 打开路径不可用：目录区与打开按钮都不渲染
     expect(screen.queryByRole('button', { name: 'openDir' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'openFile' })).toBeNull()

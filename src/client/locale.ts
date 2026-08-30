@@ -17,7 +17,6 @@ export const zh = {
   feedbackHint: '选「继续修改」时附上反馈，可选',
   discuss: '讨论',
   planDir: '计划目录',
-  modelUnavailable: '模型目录不可用',
 }
 
 /** en 文案（同键集）。 */
@@ -29,7 +28,6 @@ export const en: Record<PlanCardKey, string> = {
   feedbackHint: 'Feedback when declining, optional',
   discuss: 'Discuss',
   planDir: 'Plan directory',
-  modelUnavailable: 'Model catalog unavailable',
 }
 
 /** 本命名空间字典键（注入面 t 与 register 的类型域）。 */
