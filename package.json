@@ -45,6 +45,7 @@
         "locale",
         "remote",
         "remote.session",
+        "remote.settings",
         "connection"
       ]
     }
@@ -68,6 +69,8 @@
     "@deepseek-ai/dsh-client-ui-session": "*",
     "@deepseek-ai/dsh-client-ui-slots": "*",
     "@deepseek-ai/dsh-client-ui-tool": "*",
+    "@deepseek-ai/dsh-client-ui-chat": "*",
+    "@deepseek-ai/dsh-client-ui-conversation": "*",
     "@deepseek-ai/dsh-api-remotes": "*"
   },
   "devDependencies": {

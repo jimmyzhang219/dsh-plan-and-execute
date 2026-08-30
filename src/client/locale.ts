@@ -10,20 +10,24 @@ export const NS = 'plan-and-execute'
 
 /** zh 文案（键集源，默认语言）。 */
 export const zh = {
+  planReview: '计划审批',
   openDir: '打开计划目录',
   openFile: '打开文件',
-  applyModels: '应用模型选择',
-  applied: '已应用',
+  feedback: '驳回反馈',
+  feedbackHint: '选「继续修改」时附上反馈，可选',
+  discuss: '讨论',
   planDir: '计划目录',
   modelUnavailable: '模型目录不可用',
 }
 
 /** en 文案（同键集）。 */
 export const en: Record<PlanCardKey, string> = {
+  planReview: 'Plan review',
   openDir: 'Open plan directory',
   openFile: 'Open file',
-  applyModels: 'Apply model selection',
-  applied: 'Applied',
+  feedback: 'Rejection feedback',
+  feedbackHint: 'Feedback when declining, optional',
+  discuss: 'Discuss',
   planDir: 'Plan directory',
   modelUnavailable: 'Model catalog unavailable',
 }
