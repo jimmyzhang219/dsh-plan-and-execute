@@ -15,9 +15,12 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/dsh-session-title'
+// Type-only：ctx.settings 服务与 settings/updated 事件的 Context 合并。
+import type {} from '@deepseek-ai/dsh-settings'
 // Type-only：todo/write 事件的 SessionEventMap 合并声明由 dsh-tool-todo 拥有。
 import type {} from '@deepseek-ai/dsh-tool-todo'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
+import { PAE_MODELS_NS, PAE_MODELS_SCHEMA, parsePaeModels } from './settings.ts'
 import { fileStorage } from './persist.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
 import { isPlanModeActive, type PaeStepModel } from './state.ts'
@@ -72,6 +75,8 @@ export function apply(ctx: Context, config: Config): void {
   console.log('[plan-and-execute] plugin loaded')
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
+  /** sessionId → 编排器（settings/updated 桥接按载荷中的 sessionId 定位）。 */
+  const bySessionId = new Map<string, Orchestrator>()
 
   /** 会话计划目录：<会话 cwd>/<planDir>/<sessionId>。 */
   const planDirOf = (agent: Agent): string => {
@@ -132,7 +137,14 @@ export function apply(ctx: Context, config: Config): void {
       },
     })
     orchestrators.set(agent.session as object, orchestrator)
-    ctx.effect(() => () => orchestrator.dispose(), 'plan-and-execute: dispose orchestrators')
+    bySessionId.set(String(agent.id), orchestrator)
+    ctx.effect(
+      () => () => {
+        orchestrator.dispose()
+        bySessionId.delete(String(agent.id))
+      },
+      'plan-and-execute: dispose orchestrators',
+    )
     // 每步模型切换：agent/request waterfall 按当前步覆盖 LlmCallConfig。
     // 与宿主 installModelSelection 同一机制（后注册者最后覆盖）；无映射时透传。
     const disposeStepModel = agent.ctx.on(
@@ -290,6 +302,52 @@ export function apply(ctx: Context, config: Config): void {
   // —— 模型侧工具 ——
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
+
+  // —— settings 命名空间：审批卡下拉静默写通道 ——
+  // 注册失败（如部署已有同名命名空间）则静默降级：审批卡下拉不可用，其余功能不受影响。
+  let settingsRegistered = false
+  try {
+    ctx.settings.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
+    settingsRegistered = true
+  } catch (error) {
+    ctx.logger.warn(
+      `plan-and-execute: settings 命名空间注册失败（审批卡模型下拉不可用）：${String(error)}`,
+    )
+  }
+  if (settingsRegistered) {
+    ctx.on('settings/updated', (ns: string, next: unknown) => {
+      if (ns !== PAE_MODELS_NS) return
+      void (async () => {
+        for (const [sessionId, section] of Object.entries(
+          (next ?? {}) as Record<string, unknown>,
+        )) {
+          const orchestrator = bySessionId.get(sessionId)
+          if (orchestrator === undefined) continue
+          const parsed = parsePaeModels(section)
+          const resolved: Record<number, { provider: string; model: string }> = {}
+          for (const [stepKey, model] of Object.entries(parsed)) {
+            try {
+              const ok = await ctx.llm.resolveCallConfig({
+                provider: model.provider,
+                model: model.model,
+              })
+              resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
+            } catch (error) {
+              ctx.logger.warn(
+                `plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              )
+            }
+          }
+          const result = await orchestrator.applyStepModels(resolved)
+          if (!result.ok) {
+            ctx.logger.warn(`plan-and-execute: 应用步骤模型失败：${result.error}`)
+          }
+        }
+      })()
+    })
+  }
 
   // —— 阶段 prompt sections（读编排器内存态；未加载时渲染空）——
   ctx.systemPrompt.section({

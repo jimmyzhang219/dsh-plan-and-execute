@@ -34,11 +34,14 @@ function fakeCtx() {
       model: c.model,
     })),
   }
+  /** settings 假服务：register 逐用例可改写（抛错模拟重复注册降级路径）。 */
+  const settings = { register: vi.fn(() => {}) }
   const ctx = {
     registered,
     listeners,
     sessionTitle,
     llm,
+    settings,
     commands: {
       register: (definition: Record<string, unknown>) => {
         registered.commands.push(definition)
@@ -68,10 +71,11 @@ function fakeCtx() {
     get: vi.fn<(key: string) => unknown>((key) => {
       if (key === 'sessionTitle') return sessionTitle
       if (key === 'llm') return llm
+      if (key === 'settings') return settings
       return { ask: async () => ({ answers: [] }) }
     }),
     effect: vi.fn(() => () => {}),
-    logger: { info: () => {}, warn: () => {} },
+    logger: { info: () => {}, warn: vi.fn() },
   }
   return ctx
 }
@@ -554,5 +558,94 @@ describe('agent/request waterfall 按步切换模型', () => {
     expect(returned.provider).toBe('s')
     expect(returned.model).toBe('m')
     expect(returned.reasoningEffort).toBe('high')
+  })
+})
+
+describe('settings/updated 桥接', () => {
+  /** 取 apply 注册的 settings/updated 监听器（桥接未实现时为 undefined）。 */
+  function settingsListenerOf(ctx: ReturnType<typeof fakeCtx>) {
+    return ctx.listeners.find((l) => l.event === 'settings/updated')?.handler as
+      ((ns: string, next: unknown, prev: unknown, source: string) => void) | undefined
+  }
+
+  it('本命名空间变更 → 解析校验后 applyStepModels（按 sessionId 定位编排器）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('planning', {
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    const agent = fakeAgent('planning')
+    await fireCreated(ctx, agent)
+    const listener = settingsListenerOf(ctx)
+    expect(listener).toBeDefined()
+    listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
+    await vi.waitFor(async () => {
+      expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'a', model: 'm' })
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
+    })
+  })
+
+  it('非本命名空间 → 不处理', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('planning', {
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    const agent = fakeAgent('planning')
+    await fireCreated(ctx, agent)
+    const listener = settingsListenerOf(ctx)
+    expect(listener).toBeDefined()
+    listener!('other-ns', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
+    expect(ctx.llm.resolveCallConfig).not.toHaveBeenCalled()
+    const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+    expect(JSON.parse(raw)).not.toHaveProperty('stepModels')
+  })
+
+  it('非法条目丢弃、合法条目生效（混合载荷不抛）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('planning', {
+      plan: {
+        planDir: join(cwd, '.pae', 'sess-1'),
+        steps: [
+          { file: 'a.md', title: 'A' },
+          { file: 'b.md', title: 'B' },
+        ],
+      },
+    })
+    const agent = fakeAgent('planning')
+    await fireCreated(ctx, agent)
+    const listener = settingsListenerOf(ctx)
+    expect(listener).toBeDefined()
+    listener!(
+      'pae-step-models',
+      { 'sess-1': { 1: { provider: 42 }, 2: { provider: 'b', model: 'm2' } } },
+      {},
+      'user',
+    )
+    await vi.waitFor(async () => {
+      expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'b', model: 'm2' })
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 2: { provider: 'b', model: 'm2' } })
+    })
+  })
+
+  it('settings.register 抛错（重复注册）→ 降级不崩、无桥接监听', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    ctx.settings.register.mockImplementation(() => {
+      throw new Error('settings namespace "pae-step-models" is already registered')
+    })
+    expect(() =>
+      apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
+    ).not.toThrow()
+    expect(ctx.listeners.map((l) => l.event)).not.toContain('settings/updated')
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('settings 命名空间注册失败'),
+    )
   })
 })

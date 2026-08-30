@@ -21,6 +21,7 @@ const HOST_PACKAGES = {
   '@deepseek-ai/dsh-llm': 'packages/llm/llm',
   '@deepseek-ai/dsh-session': 'packages/core/session',
   '@deepseek-ai/dsh-session-title': 'packages/session/session-title',
+  '@deepseek-ai/dsh-settings': 'packages/settings/settings',
   '@deepseek-ai/dsh-system-prompt': 'packages/core/system-prompt',
   '@deepseek-ai/dsh-tool-todo': 'packages/todo/tool-todo',
   '@deepseek-ai/dsh-tools': 'packages/core/tools',
