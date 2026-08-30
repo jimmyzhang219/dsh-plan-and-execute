@@ -57,10 +57,7 @@ async function readState(planDir: string): Promise<PersistedOrchestratorState | 
 }
 
 /** 原子写状态快照（同目录临时文件 + rename）。 */
-async function writeState(
-  planDir: string,
-  state: PersistedOrchestratorState,
-): Promise<void> {
+async function writeState(planDir: string, state: PersistedOrchestratorState): Promise<void> {
   await mkdir(planDir, { recursive: true })
   const target = join(planDir, STATE_FILE)
   const tmp = `${target}.tmp`
