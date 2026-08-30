@@ -92,6 +92,16 @@ export function PaeReviewCard({
     ]
     settle(() => pending.answer({ answers }))
   }
+  /**
+   * 决策按钮显示本地化；answer 载荷仍发送规范标签（'批准'/'继续修改'，
+   * 与宿主编排器 APPROVE_LABEL/KEEP_LABEL 比较键一致——client 不能值导入
+   * 宿主 orchestrator.ts，字符串常量在此复制并保持同步）。
+   */
+  const optionLabel = (label: string): string => {
+    if (label === '批准') return t('approve')
+    if (label === '继续修改') return t('keep')
+    return label
+  }
   const onModelChange = (step: number, value: string): void => {
     const next = { ...selection, [step]: value }
     setSelection(next)
@@ -202,7 +212,7 @@ export function PaeReviewCard({
                 title={option.description}
                 onClick={() => decide(option.label, feedback)}
               >
-                {option.label}
+                {optionLabel(option.label)}
               </Button>
             ))}
           </span>

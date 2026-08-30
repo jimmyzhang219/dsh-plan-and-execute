@@ -83,7 +83,7 @@ describe('PaeReviewCard', () => {
 
   it("点「批准」→ pending.answer({answers:[{id, selected:['批准']}]})", async () => {
     render(<PaeReviewCard {...base} />)
-    fireEvent.click(screen.getByRole('button', { name: '批准' }))
+    fireEvent.click(screen.getByRole('button', { name: 'approve' }))
     await waitFor(() => {
       expect(base.pending.answer).toHaveBeenCalledWith({
         answers: [{ id: 'pae-approve', selected: ['批准'] }],
@@ -94,7 +94,7 @@ describe('PaeReviewCard', () => {
   it('反馈框填写后点「继续修改」→ answer 携带 custom', async () => {
     render(<PaeReviewCard {...base} />)
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '步骤 2 拆开' } })
-    fireEvent.click(screen.getByRole('button', { name: '继续修改' }))
+    fireEvent.click(screen.getByRole('button', { name: 'keep' }))
     await waitFor(() => {
       expect(base.pending.answer).toHaveBeenCalledWith({
         answers: [{ id: 'pae-approve', selected: ['继续修改'], custom: '步骤 2 拆开' }],
@@ -212,7 +212,7 @@ describe('PaeReviewCardView', () => {
         {...viewInject}
       />,
     )
-    await waitFor(() => expect(screen.getByRole('button', { name: '批准' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'approve' })).toBeTruthy())
     expect(screen.getByRole('button', { name: 'openStep 2. 计算 2+2' })).toBeTruthy()
   })
 
@@ -250,7 +250,7 @@ describe('PaeReviewCardView', () => {
         {...viewInject}
       />,
     )
-    await waitFor(() => expect(screen.getByRole('button', { name: '批准' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'approve' })).toBeTruthy())
     expect(screen.queryByRole('button', { name: /openStep/ })).toBeNull()
   })
 })
