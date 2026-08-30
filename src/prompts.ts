@@ -4,7 +4,7 @@
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import { PAE_PLUGIN, type PaePlanPayload, type PlanStep } from './state.ts'
+import { PAE_PLUGIN, type PlanStep } from './state.ts'
 
 /** 构造插件注入消息：source.kind='plugin'（不参与 dsh 用户消息语义，如自动标题派生）。 */
 function instruction(text: string, summary: string): UserMessage {
@@ -120,9 +120,4 @@ export function planReviewDetail(steps: readonly PlanStep[], planDir: string): s
     return `${index + 1}. ${step.title} — ${step.file}${mark}`
   })
   return [`计划目录：${planDir}`, ...lines].join('\n')
-}
-
-/** 计划的一句话摘要（缺省时退化为"共 N 步"）。 */
-export function planSummaryLine(plan: PaePlanPayload): string {
-  return plan.summary ?? `共 ${plan.steps.length} 步`
 }
