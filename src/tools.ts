@@ -68,7 +68,7 @@ export function createSubmitPlanTool(lookup: OrchestratorLookup) {
         },
       ],
     },
-    // 执行：按会话查编排器；无编排/无 agent 时抛错；驳回/搁置以 approved:false + feedback 正常返回（避免消息流红色 Error）。
+    // 执行：按会话查编排器；无编排/无 agent 时抛错。
     execute: async (args, exec) => {
       if (exec.agent === undefined) throw new Error('submit_plan 需要调用 agent（无会话可切换）')
       const orchestrator = lookup(exec.agent.session as object)

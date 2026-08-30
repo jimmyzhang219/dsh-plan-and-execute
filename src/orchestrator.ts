@@ -193,7 +193,7 @@ export class Orchestrator {
     phase: PaePhase | 'none'
     /** 计划目录。 */
     planDir?: string
-    /** 当前步骤号（1-based）。 */
+    /** 当前步骤号（1-based；0=已批准尚未注入首步指令）。 */
     stepIndex?: number
     /** 步骤指令注入次数（含 retry 重注入；单调递增）。 */
     stepAttempt: number
