@@ -2,3 +2,5 @@ node_modules/
 lib/
 .overlay.dev.yml
 ClassDiagram.liveclass
+.claude/skills/
+docs/
