@@ -10,15 +10,27 @@ Plan-and-Execute orchestration plugin for DeepSeek Harness (dsh).
 
 </div>
 
-dsh 的 Plan-and-Execute 编排插件：`/plan-and-execute <任务>` 启动"规划 → 审批 → 逐步执行"。
-全部 LLM 交互委托给宿主 ReactLoopAgent；控制流持久化在 `pae/*` 会话事件，步骤内容在
-`.pae/<session>/<runToken>/step-NN-*.md`；进度经 `todo/write` 渲染到会话 TodoPanel。
+dsh 的 Plan-and-Execute 编排插件
+
+## 使用方式
+
+> 在 web ui 对话框里输入斜杠命令 `/plan-and-execute`，后面跟随任务描述  
+> 全部 LLM 交互委托给宿主 ReactLoopAgent；控制流持久化在 `pae/*` 会话事件，步骤内容在
+> `.pae/<session>/<runToken>/step-NN-*.md`；进度经 `todo/write` 渲染到会话 TodoPanel  
+
+## 安装
+
+**npm 包直接安装（无需构建，安装后重启dsh服务）**
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
+```
+
+## dsh版本需求
+> 插件基于 dsh **0.1.2-alpha.1** 版本开发，低于此版本无法使用本插件
+
 
 ## 开发
-
-> 本插件基于 dsh **0.1.2-alpha.1**（本地 checkout `~/git/deepseek-harness`）开发调试。
-> 注意：npm 上的宿主发布版（0.1.1-rc.2）缺少 `canOpenWorkspacePath` 等 client API，
-> 审批卡"打开目录"按钮在该宿主下不可用——请使用本地 checkout 或等待新版宿主发布。
 
 ```sh
 pnpm install && pnpm link:host   # link:host 软链宿主包（DSH_ROOT 默认 ~/git/deepseek-harness，需先在 dsh 仓库 pnpm install && pnpm run build）
@@ -34,27 +46,6 @@ pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝�
 | `onStepFailure`     | `'pause'` | 步骤失败：暂停问人 / 自愈重试   |
 | `maxAutoRecoveries` | `2`       | 自愈次数上限（仅 auto-recover） |
 | `planDir`           | `'.pae'`  | 计划根目录（相对会话 cwd）      |
-
-## 正式安装
-
-**方式一：npm 包直接安装（无需构建）**
-
-```sh
-npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
-```
-
-**方式二：从源码构建安装**
-
-```sh
-git clone https://github.com/jimmyzhang219/dsh-plan-and-execute.git
-cd dsh-plan-and-execute
-pnpm install && pnpm build
-dsh plugin --profile <name> add .
-```
-
-> 宿主版本匹配：npm 上 `@deepseek-ai/dsh` 当前为 0.1.1-rc.2，缺少 `canOpenWorkspacePath`
-> 等 client API，审批卡"打开目录"按钮不可用；用本地 checkout（0.1.2-alpha.1）启动
-> （`cd ~/git/deepseek-harness && pnpm dsh web`）可立即获得完整功能。
 
 ## 手工验收清单（`pnpm dev` + Web UI）
 
