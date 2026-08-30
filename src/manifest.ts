@@ -1,6 +1,6 @@
 /**
  * manifest 步骤文件校验：路径安全（必须相对 planDir、无 .. 段）+ 存在/非空/是文件。
- * @module plan-and-execute/manifest
+ * @module dsh-plan-and-execute/manifest
  */
 import { stat } from 'node:fs/promises'
 import { isAbsolute, join, sep } from 'node:path'

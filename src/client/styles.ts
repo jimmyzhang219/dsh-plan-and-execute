@@ -6,7 +6,7 @@
  * 随模块记录一并清理。因此在模块顶层副作用创建标签（apply 之前即存在），
  * 而非在 React 组件里。样式使用宿主设计令牌（--dsw-* / --dsh-*），
  * 与内置 PlanReviewPanel（ui-user-questions/PlanReviewPanel.module.css）同源。
- * @module plan-and-execute/client/styles
+ * @module dsh-plan-and-execute/client/styles
  */
 
 /** 审批卡样式（scoped 前缀 .pae-，避免与宿主类名冲突）。 */
@@ -137,11 +137,11 @@ const CSS = `
 
 if (
   typeof document !== 'undefined' &&
-  document.querySelector('style[data-plugin="plan-and-execute"]') === null
+  document.querySelector('style[data-plugin="dsh-plan-and-execute"]') === null
 ) {
   const tag = document.createElement('style')
-  tag.dataset.plugin = 'plan-and-execute'
-  tag.dataset.pluginCss = 'plan-and-execute/PaeReviewCard'
+  tag.dataset.plugin = 'dsh-plan-and-execute'
+  tag.dataset.pluginCss = 'dsh-plan-and-execute/PaeReviewCard'
   tag.textContent = CSS
   document.head.appendChild(tag)
 }

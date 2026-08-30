@@ -1,6 +1,6 @@
 /**
  * 两阶段 system-prompt 正文与全部注入消息构造。纯函数。
- * @module plan-and-execute/prompts
+ * @module dsh-plan-and-execute/prompts
  */
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'

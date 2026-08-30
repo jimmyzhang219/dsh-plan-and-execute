@@ -1,6 +1,6 @@
 /**
  * 模型侧工具：submit_plan / report_step。编排器查表按 session 对象定位。
- * @module plan-and-execute/tools
+ * @module dsh-plan-and-execute/tools
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Orchestrator } from './orchestrator.ts'

@@ -2,7 +2,7 @@
  * 每步模型选择的 settings 命名空间：Web UI 审批卡下拉经
  * ctx.remote.settings.update 静默写入（不走会话消息/斜杠命令），
  * 宿主侧监听 settings/updated 桥接到编排器。
- * @module plan-and-execute/settings
+ * @module dsh-plan-and-execute/settings
  */
 import Schema from '@deepseek-ai/schemastery'
 import type { PaeStepModel } from './state.ts'

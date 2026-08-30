@@ -41,7 +41,7 @@ export default defineConfig([
     banner: {
       js: [
         'window.__ModuleLoader__.load({',
-        '\tid: "plan-and-execute",',
+        '\tid: "dsh-plan-and-execute",',
         '\tfactory: (require) => {',
         '\t\tvar module = { exports: {} };',
         '\t\tvar exports = module.exports;',

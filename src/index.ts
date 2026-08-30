@@ -1,8 +1,8 @@
 /**
- * plan-and-execute：dsh 插件入口（组合根）。
+ * dsh-plan-and-execute：dsh 插件入口（组合根）。
  * 开发装载：scripts/dev.mjs → `pnpm dsh web --patch .overlay.dev.yml`；
  * 正式安装：`dsh plugin --profile <name> add <本工程目录>`（读 dsh.bundle.patch）。
- * @module plan-and-execute
+ * @module dsh-plan-and-execute
  */
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
@@ -26,8 +26,8 @@ import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
 import { isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
 
-/** 插件名（命令名、编排目录命名空间）。 */
-export const name = 'plan-and-execute'
+/** 插件名（dsh 插件注册名；斜杠命令见下方命令注册）。 */
+export const name = 'dsh-plan-and-execute'
 /** 必需服务注入：工具注册表与 system-prompt 段落表。 */
 export const inject = ['tools', 'systemPrompt']
 
@@ -72,7 +72,7 @@ function toDriveAgent(agent: Agent): DriveAgent {
  * @param config - 插件配置。
  */
 export function apply(ctx: Context, config: Config): void {
-  console.log('[plan-and-execute] plugin loaded')
+  console.log('[dsh-plan-and-execute] plugin loaded')
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
   /** sessionId → 编排器（settings/updated 桥接按载荷中的 sessionId 定位）。 */
@@ -143,7 +143,7 @@ export function apply(ctx: Context, config: Config): void {
         orchestrator.dispose()
         bySessionId.delete(String(agent.id))
       },
-      'plan-and-execute: dispose orchestrators',
+      'dsh-plan-and-execute: dispose orchestrators',
     )
     /**
      * 每步模型切换：agent/request waterfall 按当前步覆盖 LlmCallConfig。
@@ -166,7 +166,7 @@ export function apply(ctx: Context, config: Config): void {
         }
       },
     )
-    ctx.effect(() => () => disposeStepModel(), 'plan-and-execute: step model waterfall')
+    ctx.effect(() => () => disposeStepModel(), 'dsh-plan-and-execute: step model waterfall')
     /** todo 面板补写：宿主 todos 投影在 turn/start 清空，回合内经 agent/request 通道补发（细节见下）。 */
     /**
      * 宿主 todos 投影在 turn/start 清空（假定模型每回合重写清单），
@@ -189,7 +189,7 @@ export function apply(ctx: Context, config: Config): void {
         return next()
       },
     )
-    ctx.effect(() => () => disposeTodosRefresh(), 'plan-and-execute: todos refresh on new turn')
+    ctx.effect(() => () => disposeTodosRefresh(), 'dsh-plan-and-execute: todos refresh on new turn')
     return orchestrator
   }
 
@@ -236,7 +236,7 @@ export function apply(ctx: Context, config: Config): void {
           try {
             titles.rename(agent.session, task)
           } catch (error: unknown) {
-            ctx.logger.warn(`plan-and-execute: 会话标题写入失败：${String(error)}`)
+            ctx.logger.warn(`dsh-plan-and-execute: 会话标题写入失败：${String(error)}`)
           }
         }
         await orchestrator.begin(task)
@@ -260,7 +260,7 @@ export function apply(ctx: Context, config: Config): void {
     settingsRegistered = true
   } catch (error) {
     ctx.logger.warn(
-      `plan-and-execute: settings 命名空间注册失败（审批卡模型下拉不可用）：${String(error)}`,
+      `dsh-plan-and-execute: settings 命名空间注册失败（审批卡模型下拉不可用）：${String(error)}`,
     )
   }
   if (settingsRegistered) {
@@ -287,7 +287,7 @@ export function apply(ctx: Context, config: Config): void {
               resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
             } catch (error) {
               ctx.logger.warn(
-                `plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
+                `dsh-plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
                   error instanceof Error ? error.message : String(error)
                 }`,
               )
@@ -299,13 +299,13 @@ export function apply(ctx: Context, config: Config): void {
           const resolvedEntries = Object.keys(resolved).length
           if (parsedEntries > 0 && resolvedEntries === 0) {
             ctx.logger.warn(
-              'plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
+              'dsh-plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
             )
             continue
           }
           const result = await orchestrator.applyStepModels(resolved)
           if (!result.ok) {
-            ctx.logger.warn(`plan-and-execute: 应用步骤模型失败：${result.error}`)
+            ctx.logger.warn(`dsh-plan-and-execute: 应用步骤模型失败：${result.error}`)
           }
         }
       })()

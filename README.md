@@ -1,4 +1,4 @@
-# plan-and-execute（dsh 插件）
+# dsh-plan-and-execute（dsh 插件）
 
 dsh 的 Plan-and-Execute 编排插件：`/plan-and-execute <任务>` 启动"规划 → 审批 → 逐步执行"。
 全部 LLM 交互委托给宿主 ReactLoopAgent；控制流持久化在 `pae/*` 会话事件，步骤内容在
@@ -25,7 +25,7 @@ pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝�
 
 ```sh
 pnpm build
-dsh plugin --profile <name> add /Users/jimmy/VSCodeProjects/dsh-plugin/plan-and-execute
+dsh plugin --profile <name> add /Users/jimmy/VSCodeProjects/dsh-plugin/dsh-plan-and-execute
 ```
 
 ## 手工验收清单（`pnpm dev` + Web UI）

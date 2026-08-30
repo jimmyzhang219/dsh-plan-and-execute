@@ -1,18 +1,18 @@
 /**
- * plan-and-execute 的编排状态词汇与工具函数。
+ * dsh-plan-and-execute 的编排状态词汇与工具函数。
  *
  * 注意：dsh 的会话事件白名单（KNOWN_SESSION_EVENT_TYPES）不接受外部插件的
  * 自定义事件类型，因此编排控制流状态不写入会话日志，而是持久化在
  * planDir/orchestrator.json（见 persist.ts）；会话日志只记录标准事件
  * （todo/write、turn/* 等）。
- * @module plan-and-execute/state
+ * @module dsh-plan-and-execute/state
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 /** 插件标识（消息 source.plugin、编排目录命名空间）。 */
-export const PAE_PLUGIN = 'plan-and-execute'
+export const PAE_PLUGIN = 'dsh-plan-and-execute'
 
 /**
  * 每步模型选择的 settings 命名空间名（全局用户配置，按 sessionId 分键）。

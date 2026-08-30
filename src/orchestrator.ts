@@ -1,12 +1,12 @@
 /**
- * plan-and-execute 编排器：状态机 + 步进驱动循环。
+ * dsh-plan-and-execute 编排器：状态机 + 步进驱动循环。
  * 只依赖窄结构接口（DriveAgent/DriveSession/AskFn/PersistedStorage），
  * 全部可离线单测；真实 Agent 的适配在 src/index.ts。
  *
  * 控制流状态不写会话日志（dsh 白名单拒绝外部事件类型），改由
  * PersistedStorage 存 planDir/orchestrator.json；会话日志只记录标准事件
  * （turn/*、todo/write）。
- * @module plan-and-execute/orchestrator
+ * @module dsh-plan-and-execute/orchestrator
  */
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
@@ -120,7 +120,7 @@ interface RuntimeState {
 }
 
 /**
- * plan-and-execute 编排器：状态机 + 步进驱动循环。
+ * dsh-plan-and-execute 编排器：状态机 + 步进驱动循环。
  * 只依赖窄结构依赖（DriveAgent/DriveSession/AskFn/PersistedStorage），
  * 全部可离线单测；真实 Agent 的适配在 src/index.ts 的 toDriveAgent。
  */

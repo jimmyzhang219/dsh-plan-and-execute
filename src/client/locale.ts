@@ -1,12 +1,12 @@
 /**
- * plan-review 审批卡文案（`plan-and-execute` 命名空间）。
+ * plan-review 审批卡文案（`dsh-plan-and-execute` 命名空间）。
  * 键集以 zh 为准，en 同键翻译；`locale` 服务的 register 需要两份字典。
- * @module plan-and-execute/client/locale
+ * @module dsh-plan-and-execute/client/locale
  */
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
 /** 审批卡文案命名空间（register 的 locale 字段引用）。 */
-export const NS = 'plan-and-execute'
+export const NS = 'dsh-plan-and-execute'
 
 /** zh 文案（键集源，默认语言）。 */
 export const zh = {
@@ -38,6 +38,6 @@ export type PaeCardKey = keyof typeof zh
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** plan-review 审批卡文案键集。 */
-    'plan-and-execute': PaeCardKey
+    'dsh-plan-and-execute': PaeCardKey
   }
 }

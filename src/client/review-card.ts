@@ -1,6 +1,6 @@
 /**
  * 审批卡替换的纯函数层（无 React/DOM 依赖，可 node 单测）。
- * @module plan-and-execute/client/review-card
+ * @module dsh-plan-and-execute/client/review-card
  */
 import type { CardArgs } from './plan-card.ts'
 import { serializeStepModels } from './plan-card.ts'

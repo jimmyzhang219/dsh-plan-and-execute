@@ -7,7 +7,7 @@
  * 注意（2026-08-30 线上事故）：视图不得使用 useChat/useProjection——composer 座位调用
  * useChat 触发宿主聊天快照构建器脱绑崩溃（this.valuesDirty），审批提问不可见导致宿主
  * askOrDismiss 永久挂起。步骤数据一律来自审批问题 detail（parsePlanDetail，自有格式）。
- * @module plan-and-execute/client/PaeReviewCard
+ * @module dsh-plan-and-execute/client/PaeReviewCard
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -120,7 +120,7 @@ export function PaeReviewCard({
     setError(null)
     // 会话标识缺失（极边缘路径）时跳过静默写：决策按钮仍可用，下拉仅本地生效。
     if (sessionId === '') {
-      console.warn('[plan-and-execute] 审批卡缺少 sessionId，跳过模型选择保存')
+      console.warn('[dsh-plan-and-execute] 审批卡缺少 sessionId，跳过模型选择保存')
       return
     }
     void settings

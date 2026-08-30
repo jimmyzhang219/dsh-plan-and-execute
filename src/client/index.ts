@@ -1,9 +1,9 @@
 /**
- * plan-and-execute 的 client half：plan-review 审批卡替换（composer）。
+ * dsh-plan-and-execute 的 client half：plan-review 审批卡替换（composer）。
  * dsh 浏览器端模块系统加载；React 可用（种子词）。
  * 注：submit_plan toolview 自定义卡片已于 2026-08-30 移除（功能收敛到审批卡，
  * 会话流恢复 dsh 默认消息流渲染）。
- * @module plan-and-execute/client
+ * @module dsh-plan-and-execute/client
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
@@ -19,7 +19,7 @@ import { isPlanReviewPending } from './review-card.ts'
 import { PaeReviewCardView, type PaeReviewCardInjected } from './PaeReviewCard.tsx'
 
 /** 插件名（与宿主 half 同名，供模块表路由）。 */
-export const name = 'plan-and-execute'
+export const name = 'dsh-plan-and-execute'
 /** 必需服务注入：槽位注册表、文案字典、远程会话/设置面与连接面。 */
 export const inject = [
   'slots',
@@ -33,7 +33,7 @@ export const inject = [
 /** 客户端入口：注册字典与 plan-review 审批卡 composer。 */
 export function apply(ctx: Context): void {
   const connection = ctx.get('connection') as ConnectionHandle
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'plan-and-execute: dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-plan-and-execute: dictionaries')
   // plan-review 审批卡替换：priority -1 先于宿主 question composer 判定，
   // 结构命中（kind==='plan-review' 且具备 answer/cancel/questions）即接管
   ctx.slots.inject('conversation.composer', () =>

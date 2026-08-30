@@ -20,7 +20,7 @@ try {
 const body = text.replace(/\n?\/\/# sourceMappingURL=[^\n]*$/m, '').replace(/\s+$/, '')
 const checks = [
   ['以 window.__ModuleLoader__.load({ 开头', body.startsWith('window.__ModuleLoader__.load({')],
-  ['包含 id: "plan-and-execute"', body.includes('id: "plan-and-execute"')],
+  ['包含 id: "dsh-plan-and-execute"', body.includes('id: "dsh-plan-and-execute"')],
   ['以 return module.exports; }); 收尾', /return module\.exports;\s*\}\s*\}\);?$/.test(body)],
 ]
 // 运行时 require 只允许平台种子词：client 代码若值导入宿主模块（如 schemastery），

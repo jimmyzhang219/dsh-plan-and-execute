@@ -2,7 +2,7 @@
  * 编排控制流状态的磁盘持久化。dsh 的会话事件白名单（KNOWN_SESSION_EVENT_TYPES）
  * 不接受外部插件自定义事件类型（写了会导致会话历史拒读），因此编排状态
  * 存为 planDir 下的 orchestrator.json（整值替换快照，原子写入）。
- * @module plan-and-execute/persist
+ * @module dsh-plan-and-execute/persist
  */
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'

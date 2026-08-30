@@ -43,7 +43,7 @@ describe('注入消息', () => {
     expect(text).toContain('/p')
     expect(message.source).toMatchObject({
       kind: 'plugin',
-      plugin: 'plan-and-execute',
+      plugin: 'dsh-plan-and-execute',
       form: 'instructions',
     })
   })

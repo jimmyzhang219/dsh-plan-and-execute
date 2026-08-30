@@ -2,7 +2,7 @@
  * 审批卡模型选择相关的纯函数层（无 React/DOM 依赖，可 node 单测）。
  * 注：submit_plan toolview 卡片已于 2026-08-30 移除（功能收敛到审批卡），
  * 本模块保留审批卡仍在消费的形状与函数。
- * @module plan-and-execute/client/plan-card
+ * @module dsh-plan-and-execute/client/plan-card
  */
 
 /** 卡片载荷（submit_plan 参数；审批卡经 parsePlanDetail 构造）。 */

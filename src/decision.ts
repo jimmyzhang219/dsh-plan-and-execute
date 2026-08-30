@@ -1,6 +1,6 @@
 /**
  * 步骤结局分类与失败策略决策。纯函数。
- * @module plan-and-execute/decision
+ * @module dsh-plan-and-execute/decision
  */
 import type { PaePausedReason, PaeStepReportPayload } from './state.ts'
 

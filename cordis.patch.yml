@@ -1,8 +1,8 @@
 # cordis.patch.yml — 正式安装（dsh plugin --profile <name> add <本工程目录>）。
 # 先 pnpm build 生成 lib/，再安装；name 用裸包名，从 profile node_modules 解析。
 - insert:
-    - id: plan-and-execute
-      name: plan-and-execute
+    - id: dsh-plan-and-execute
+      name: dsh-plan-and-execute
       config:
         onStepFailure: 'pause'
         maxAutoRecoveries: 2
