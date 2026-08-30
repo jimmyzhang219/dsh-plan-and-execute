@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildSetModelsPrompt,
   degradedCardArgs,
   flattenCatalog,
   parseCardArgs,
@@ -108,13 +107,5 @@ describe('degradedCardArgs', () => {
 describe('serializeStepModels', () => {
   it('"provider|model" 值 → {provider, model} 载荷', () => {
     expect(serializeStepModels({ 1: 'a|m' })).toEqual({ 1: { provider: 'a', model: 'm' } })
-  })
-})
-
-describe('buildSetModelsPrompt', () => {
-  it('生成命令文本（JSON.stringify 序列化）', () => {
-    expect(buildSetModelsPrompt({ 1: { provider: 'a', model: 'm' } })).toBe(
-      '/plan-and-execute-set-models {"1":{"provider":"a","model":"m"}}',
-    )
   })
 })

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -632,6 +632,49 @@ describe('settings/updated 桥接', () => {
       const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
       expect(JSON.parse(raw).stepModels).toEqual({ 2: { provider: 'b', model: 'm2' } })
     })
+  })
+
+  it('applyStepModels 抛错（目录只读落盘失败）→ 监听器返回 rejected promise（宿主容器可接住记 warn）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('planning', {
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    const agent = fakeAgent('planning')
+    await fireCreated(ctx, agent)
+    const listener = settingsListenerOf(ctx)
+    expect(listener).toBeDefined()
+    // 目录只读 → save 的 writeFile 抛 EACCES → applyStepModels 抛出 → IIFE 拒绝
+    await chmod(join(cwd, '.pae', 'sess-1'), 0o500)
+    try {
+      await expect(
+        listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user'),
+      ).rejects.toThrow()
+    } finally {
+      await chmod(join(cwd, '.pae', 'sess-1'), 0o700)
+    }
+  })
+
+  it('解析出步骤但 resolveCallConfig 全失败 → 跳过本次应用（既有选择保留，不清空）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('planning', {
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+      stepModels: { 1: { provider: 'p1', model: 'm1' } },
+    })
+    const agent = fakeAgent('planning')
+    await fireCreated(ctx, agent)
+    const listener = settingsListenerOf(ctx)
+    expect(listener).toBeDefined()
+    ctx.llm.resolveCallConfig.mockRejectedValue(new Error('unknown model'))
+    await listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
+    await vi.waitFor(async () => {
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'p1', model: 'm1' } })
+    })
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('全部步骤模型不可用'))
   })
 
   it('settings.register 抛错（重复注册）→ 降级不崩、无桥接监听', async () => {

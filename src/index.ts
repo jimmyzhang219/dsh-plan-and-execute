@@ -317,7 +317,9 @@ export function apply(ctx: Context, config: Config): void {
   if (settingsRegistered) {
     ctx.on('settings/updated', (ns: string, next: unknown) => {
       if (ns !== PAE_MODELS_NS) return
-      void (async () => {
+      // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
+      // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。
+      return (async () => {
         for (const [sessionId, section] of Object.entries(
           (next ?? {}) as Record<string, unknown>,
         )) {
@@ -339,6 +341,14 @@ export function apply(ctx: Context, config: Config): void {
                 }`,
               )
             }
+          }
+          // 解析出步骤但全部 resolve 失败：视为瞬态不可用，跳过本次应用
+          //（applyStepModels 整体替换语义下空映射会清空既有选择）。
+          const parsedEntries = Object.keys(parsed).length
+          const resolvedEntries = Object.keys(resolved).length
+          if (parsedEntries > 0 && resolvedEntries === 0) {
+            ctx.logger.warn('plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）')
+            continue
           }
           const result = await orchestrator.applyStepModels(resolved)
           if (!result.ok) {

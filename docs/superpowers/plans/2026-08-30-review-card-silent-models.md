@@ -46,7 +46,7 @@
 **修改（client half）：**
 - `src/client/index.ts` — composer chain 注册（priority -1）+ inject 加 `'remote.settings'`
 - `src/client/PlanCard.tsx` — 移除下拉/应用（DD7）
-- `src/client/plan-card.ts` — `serializeStepModels` 保留（`buildSettingsPatch` 复用）；`buildSetModelsPrompt` 保留（命令兼容）
+- `src/client/plan-card.ts` — `serializeStepModels` 保留（`buildSettingsPatch` 复用）；`buildSetModelsPrompt` 已删除（最终修复波 I-2：命令注册在宿主侧 `src/index.ts`，该函数零引用孤儿）
 - `src/client/locale.ts` — review 卡文案键（zh/en）；删 applyModels/applied 键
 
 **测试：**

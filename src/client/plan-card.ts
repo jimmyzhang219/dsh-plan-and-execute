@@ -117,10 +117,3 @@ export function serializeStepModels(
   }
   return models
 }
-
-/** 生成 set-models 命令文本（session.prompt 载荷）。 */
-export function buildSetModelsPrompt(
-  models: Readonly<Record<number, { provider: string; model: string }>>,
-): string {
-  return `/plan-and-execute-set-models ${JSON.stringify(models)}`
-}
