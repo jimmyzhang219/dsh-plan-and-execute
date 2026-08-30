@@ -145,8 +145,10 @@ export function apply(ctx: Context, config: Config): void {
       },
       'plan-and-execute: dispose orchestrators',
     )
-    // 每步模型切换：agent/request waterfall 按当前步覆盖 LlmCallConfig。
-    // 与宿主 installModelSelection 同一机制（后注册者最后覆盖）；无映射时透传。
+    /**
+     * 每步模型切换：agent/request waterfall 按当前步覆盖 LlmCallConfig。
+     * 与宿主 installModelSelection 同一机制（后注册者最后覆盖）；无映射时透传。
+     */
     const disposeStepModel = agent.ctx.on(
       'agent/request',
       async (_payload: unknown, next: () => Promise<LlmCallConfig>): Promise<LlmCallConfig> => {
@@ -165,10 +167,13 @@ export function apply(ctx: Context, config: Config): void {
       },
     )
     ctx.effect(() => () => disposeStepModel(), 'plan-and-execute: step model waterfall')
-    // todo 面板补写：宿主 todos 投影在 turn/start 清空（假定模型每回合重写清单），
-    // 插件驱动的 todo 写在 steer 之前会被清掉 → 回合内面板消失。经 agent/request
-    // 通道（已被模型切换 waterfall 验证可用）在新回合第一个请求时补发 todo/write。
-    // （session/event 在 agent.ctx 收不到、宿主 ctx 也未触发——实测无效，弃用。）
+    /** todo 面板补写：宿主 todos 投影在 turn/start 清空，回合内经 agent/request 通道补发（细节见下）。 */
+    /**
+     * 宿主 todos 投影在 turn/start 清空（假定模型每回合重写清单），
+     * 插件驱动的 todo 写在 steer 之前会被清掉 → 回合内面板消失。经 agent/request
+     * 通道（已被模型切换 waterfall 验证可用）在新回合第一个请求时补发 todo/write。
+     * （session/event 在 agent.ctx 收不到、宿主 ctx 也未触发——实测无效，弃用。）
+     */
     let lastTurn = -1
     const disposeTodosRefresh = agent.ctx.on(
       'agent/request',
@@ -259,6 +264,8 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
   if (settingsRegistered) {
+    // —— settings/updated 桥接：审批卡下拉 → 编排器 applyStepModels ——
+    // 载荷按 sessionId 分键；先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过。
     ctx.on('settings/updated', (ns: string, next: unknown) => {
       if (ns !== PAE_MODELS_NS) return
       // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
