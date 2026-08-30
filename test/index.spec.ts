@@ -477,10 +477,9 @@ describe('agent/request waterfall 按步切换模型', () => {
 })
 
 describe('todos 补写（turn/start → session/event）', () => {
-  /** 取 ensure 注册的 'session/event' 监听器。 */
-  function sessionEventHandlerOf(agent: ReturnType<typeof fakeAgent>) {
-    const onMock = agent.ctx.on as Mock
-    return onMock.mock.calls.find(([event]) => event === 'session/event')?.[1] as
+  /** 取宿主 ctx 注册的 'session/event' 监听器（session/event 只从 session 作用域 ctx 分发）。 */
+  function sessionEventHandlerOf(ctx: ReturnType<typeof fakeCtx>) {
+    return ctx.listeners.find((l) => l.event === 'session/event')?.handler as
       ((session: unknown, event: { type?: unknown }) => void) | undefined
   }
 
@@ -500,7 +499,7 @@ describe('todos 补写（turn/start → session/event）', () => {
     })
     const agent = fakeAgent('executing')
     await fireCreated(ctx, agent)
-    const handler = sessionEventHandlerOf(agent)
+    const handler = sessionEventHandlerOf(ctx)
     expect(handler).toBeDefined()
     handler!(agent.session, { type: 'turn/start' })
     expect(agent.session.append).toHaveBeenCalledWith(
@@ -509,7 +508,7 @@ describe('todos 补写（turn/start → session/event）', () => {
     )
   })
 
-  it('非 turn/start 事件不触发补写', async () => {
+  it('非 turn/start 事件 / 无编排的会话 → 不补写', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
@@ -522,9 +521,11 @@ describe('todos 补写（turn/start → session/event）', () => {
     })
     const agent = fakeAgent('executing')
     await fireCreated(ctx, agent)
-    const handler = sessionEventHandlerOf(agent)
+    const handler = sessionEventHandlerOf(ctx)
     handler!(agent.session, { type: 'turn/end' })
     expect(agent.session.append).not.toHaveBeenCalledWith('todo/write', expect.anything())
+    // 无编排的会话（未 fireCreated）：WeakMap 查表过滤，不抛
+    handler!({ id: 'other' }, { type: 'turn/start' })
   })
 })
 

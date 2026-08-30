@@ -171,15 +171,6 @@ export function apply(ctx: Context, config: Config): void {
       },
     )
     ctx.effect(() => () => disposeStepModel(), 'plan-and-execute: step model waterfall')
-    // 宿主 todos 投影在 turn/start 清空（假定模型每回合重写清单）；插件驱动的 todo
-    // 写在 steer 之前会被清掉 → 面板消失。turn/start 后补发 todo/write 保持面板可见。
-    const disposeTodosRefresh = agent.ctx.on(
-      'session/event',
-      (_session: unknown, event: { type?: unknown }) => {
-        if (event?.type === 'turn/start') orchestrator.refreshTodos()
-      },
-    )
-    ctx.effect(() => () => disposeTodosRefresh(), 'plan-and-execute: todos refresh on turn/start')
     return orchestrator
   }
 
@@ -241,6 +232,15 @@ export function apply(ctx: Context, config: Config): void {
   // —— 模型侧工具 ——
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
+
+  // —— todo 面板补写：宿主 todos 投影在 turn/start 清空（假定模型每回合重写清单），
+  // 插件驱动的 todo 写在 steer 之前会被清掉 → 面板消失。turn/start 后补发
+  // todo/write 保持面板可见。注册在宿主 ctx（session/event 只从 session 作用域
+  // ctx 分发，agent.ctx 收不到；按 session 查编排器过滤）。——
+  ctx.on('session/event', (session: unknown, event: { type?: unknown }) => {
+    if (event?.type !== 'turn/start') return
+    orchestrators.get(session as object)?.refreshTodos()
+  })
 
   // —— settings 命名空间：审批卡下拉静默写通道 ——
   // 注册失败（如部署已有同名命名空间）则静默降级：审批卡下拉不可用，其余功能不受影响。
