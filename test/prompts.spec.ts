@@ -8,6 +8,7 @@ import {
   replanInstruction,
   resumePlanningInstruction,
   stepInstruction,
+  userTaskMessage,
   PLANNING_SECTION_BODY,
 } from '../src/prompts.ts'
 
@@ -19,21 +20,43 @@ describe('section 正文', () => {
     expect(text).toContain('step-NN')
     expect(text).toContain('requiresConfirmation')
   })
-  it('planning 正文明确禁用 exit_plan_mode（dsh plan-mode 工具）', () => {
+  it('planning 正文不再提及 exit_plan_mode（工具层 deny 已覆盖），保留正向审批规则', () => {
     const text = PLANNING_SECTION_BODY('/ws/.pae/s/20260826')
-    expect(text).toContain('exit_plan_mode')
-    expect(text).toContain('不要调用')
+    expect(text).not.toContain('exit_plan_mode')
+    expect(text).toContain('计划审批只通过 submit_plan 完成')
   })
-  it('executing 正文含 report_step 与 todo 纪律，并禁用 submit_plan/exit_plan_mode', () => {
+  it('executing 正文含 report_step 与 todo 纪律，并禁用 submit_plan、不提及 exit_plan_mode', () => {
     const text = EXECUTING_SECTION_BODY()
     expect(text).toContain('report_step')
     expect(text).toContain('todo_write')
     expect(text).toContain('submit_plan')
-    expect(text).toContain('exit_plan_mode')
+    expect(text).not.toContain('exit_plan_mode')
+  })
+  it('executing 正文要求以步骤文件内容为唯一执行依据', () => {
+    const text = EXECUTING_SECTION_BODY()
+    expect(text).toContain('唯一执行依据')
+  })
+  it('executing 正文规定文件与标题/任务不一致时以文件为准，不按标题猜测执行', () => {
+    const text = EXECUTING_SECTION_BODY()
+    expect(text).toContain('以文件')
+    expect(text).toContain('不一致')
+  })
+  it('executing 正文规定文件自相矛盾时 blocked 上报，而非自行裁决', () => {
+    const text = EXECUTING_SECTION_BODY()
+    expect(text).toContain('自相矛盾')
+    expect(text).toContain('blocked')
+    expect(text).not.toContain('完成当前步能完成的部分')
   })
 })
 
 describe('注入消息', () => {
+  it('userTaskMessage 携带用户原文，source 标记为用户消息（与 /plan 同语义）', () => {
+    const message = userTaskMessage('先计算1+1，得出结果后再加3')
+    expect(message.role).toBe('user')
+    const text = (message.content[0] as { text: string }).text
+    expect(text).toBe('先计算1+1，得出结果后再加3')
+    expect(message.source).toEqual({ kind: 'user' })
+  })
   it('kickoff 含任务原文与 planDir，source 标记为 plugin instruction', () => {
     const message = kickoffInstruction('重构登录模块', '/p')
     expect(message.role).toBe('user')

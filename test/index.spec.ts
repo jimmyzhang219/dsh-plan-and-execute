@@ -210,7 +210,8 @@ describe('apply 装配', () => {
     const agent = fakeAgent('none')
     const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
-    expect(agent.steer).toHaveBeenCalledTimes(1)
+    // 用户原文 + kickoff 指令
+    expect(agent.steer).toHaveBeenCalledTimes(2)
   })
 
   it('启动编排 → 用任务文本重命名会话标题（无持久化标题时）', async () => {
@@ -260,7 +261,7 @@ describe('apply 装配', () => {
     const agent = fakeAgent('none')
     const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
-    expect(agent.steer).toHaveBeenCalledTimes(1)
+    expect(agent.steer).toHaveBeenCalledTimes(2)
   })
 
   it('rename 抛错（服务异常）→ 容错，编排正常启动', async () => {
@@ -276,7 +277,7 @@ describe('apply 装配', () => {
     const agent = fakeAgent('none')
     const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
-    expect(agent.steer).toHaveBeenCalledTimes(1)
+    expect(agent.steer).toHaveBeenCalledTimes(2)
   })
 
   it('启动编排 → 对该 agent deny exit_plan_mode（agent-scoped restrict）', async () => {
@@ -317,7 +318,7 @@ describe('apply 装配', () => {
     })
     const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
-    expect(agent.steer).toHaveBeenCalledTimes(1)
+    expect(agent.steer).toHaveBeenCalledTimes(2)
   })
 
   it('paused 态命令重入 → 重新弹出暂停选项', async () => {

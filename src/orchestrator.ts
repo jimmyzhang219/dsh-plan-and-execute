@@ -28,6 +28,7 @@ import {
   replanInstruction,
   resumePlanningInstruction,
   stepInstruction,
+  userTaskMessage,
 } from './prompts.ts'
 import {
   buildTodoPayload,
@@ -224,6 +225,9 @@ export class Orchestrator {
     this.reportWatermark = 0
     this.stepAttempt = 0
     await this.save()
+    // 用户原文以 kind='user' 先注入（轨迹「用户」行，与 /plan 同语义），
+    // 再注入插件编排指令（kind='plugin'，轨迹「上下文」行）。
+    this.deps.agent.steer(userTaskMessage(task))
     this.deps.agent.steer(kickoffInstruction(task, this.deps.planDir))
     this.armApproval()
   }

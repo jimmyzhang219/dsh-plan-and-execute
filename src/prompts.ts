@@ -14,6 +14,17 @@ function instruction(text: string, summary: string): UserMessage {
   })
 }
 
+/**
+ * 构造用户任务原文消息：source.kind='user'，与 dsh 内置 /plan 命令同语义
+ * （用户输入以用户身份进入轨迹「用户」行、参与标题派生）。
+ */
+export function userTaskMessage(task: string): UserMessage {
+  return createUserMessage({
+    content: [{ type: 'text', text: task }],
+    source: { kind: 'user' },
+  })
+}
+
 /** 规划阶段 system-prompt 段落正文（步骤文件规范 + submit_plan 纪律）。 */
 export function PLANNING_SECTION_BODY(planDir: string): string {
   return [
@@ -26,7 +37,6 @@ export function PLANNING_SECTION_BODY(planDir: string): string {
     '- 本阶段不做变更性操作：写文件仅限上述计划目录。',
     '- 全部步骤文件写完后，调用 submit_plan 提交步骤清单（file 相对计划目录）。',
     '  用户会审批；被驳回时按反馈修改文件后重新提交。',
-    '- 不要调用 exit_plan_mode——它属于 dsh 的 plan-mode 功能，本编排不使用；',
     '  计划审批只通过 submit_plan 完成。',
     '调用 submit_plan 时，planDir 参数必须原样传回上面的目录（不要改写或省略）。',
   ].join('\n')
@@ -38,11 +48,12 @@ export function EXECUTING_SECTION_BODY(): string {
     '## Plan-and-Execute：执行阶段',
     '你在 plan-and-execute 编排的执行阶段，每次只处理"当前这一步"：',
     '- 只做当前步骤要求的事，不做后续步骤（除非当前步骤文件明确要求）。',
-    '- 开始前先读取当前步骤的 Markdown 文件。',
+    '- 开始前先读取当前步骤的 Markdown 文件，文件内容是本步的唯一执行依据。',
+    '- 文件内容与指令标题或任务文本不一致时，以文件内容为准，不要按标题或任务猜测执行。',
+    '- 文件内容自相矛盾、无法确定本步该做什么时，调用 report_step(outcome=blocked) 说明矛盾点，等待处理；不要自行挑选一种解释执行。',
     '- 本步结束前必须调用 report_step 汇报：完成用 outcome=done，受阻用 outcome=blocked，如实汇报，不谎报。',
-    '- 发现计划有误时：完成当前步能完成的部分并在 summary 说明，或 report_step(blocked) 说明原因；不要自行跳步或改做其他步骤。',
     '- todo 清单由插件维护：不要调用 todo_write（整表替换会覆盖插件写入的进度）。',
-    '- 不要调用 submit_plan（仅规划阶段可用）或 exit_plan_mode（dsh plan-mode 的工具）——本阶段的汇报工具只有 report_step。',
+    '- 不要调用 submit_plan（仅规划阶段可用）——本阶段的汇报工具只有 report_step。',
   ].join('\n')
 }
 

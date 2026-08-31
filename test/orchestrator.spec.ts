@@ -58,7 +58,14 @@ describe('主执行路径', () => {
       storage,
     })
     await orchestrator.begin('做某事')
-    expect(agent.steered).toHaveLength(1)
+    // 用户原文（kind=user）+ kickoff 指令（kind=plugin）两条注入
+    expect(agent.steered).toHaveLength(2)
+    expect(agent.steered[0]!.source).toEqual({ kind: 'user' })
+    expect((agent.steered[0]!.content[0] as { text: string }).text).toBe('做某事')
+    expect(agent.steered[1]!.source).toMatchObject({
+      kind: 'plugin',
+      plugin: 'dsh-plan-and-execute',
+    })
     expect(storage.state?.phase).toBe('planning')
     expect(storage.state?.task).toBe('做某事')
     expect(storage.state?.planDir).toBe('/tmp/pae-test-plan')
