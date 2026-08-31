@@ -16,7 +16,7 @@ dsh 的 Plan-and-Execute 编排插件
 
 在 web ui 对话框里输入斜杠命令 `/plan-and-execute`，后面跟随任务描述  
 全部 LLM 交互委托给宿主 ReactLoopAgent；控制流持久化在 `pae/*` 会话事件，步骤内容在
-`.pae/<session>/<runToken>/step-NN-*.md`；进度经 `todo/write` 渲染到会话 TodoPanel  
+`.pae/<session>/<runToken>/step-NN-*.md`；进度经 `todo/write` 渲染到会话 TodoPanel
 
 ## 安装
 
@@ -27,8 +27,8 @@ npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
 ```
 
 ## dsh版本需求
-插件基于 dsh **0.1.2-alpha.1** 版本开发，低于此版本无法使用本插件
 
+插件基于 dsh **0.1.2-alpha.1** 版本开发，低于此版本无法使用本插件
 
 ## 开发
 
