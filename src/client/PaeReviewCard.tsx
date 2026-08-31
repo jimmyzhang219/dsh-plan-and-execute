@@ -11,7 +11,7 @@
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ClientRemote, JsonValue, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ClientRemote, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only：composer 槽位类型合并（本组件不再消费 useChat/useProjection）。
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -35,6 +35,13 @@ interface AnswerLike {
     readonly custom?: string
   }>
 }
+
+/**
+ * JSON 值（settings 通道载荷类型）。宿主侧定义于 dsh-util-values，
+ * 该包运行时由 dsh 进程提供、不随本插件安装，故在此本地复刻，
+ * 语义与宿主一致（见 review-card.ts 的 buildSettingsPatch 载荷）。
+ */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
 export interface PaeReviewCardProps {
   /** 会话标识（与宿主 agent.id 同源；空串时跳过模型选择静默写）。 */
