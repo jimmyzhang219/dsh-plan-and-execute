@@ -20,10 +20,6 @@ DeepSeek Harness (dsh) 的 Plan-and-Execute 编排插件
 npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
 ```
 
-## dsh版本需求
-
-插件基于 dsh **0.1.2-alpha.1** 版本开发，低于此版本无法使用本插件
-
 ## 使用方式
 
 在 Web UI 对话框里输入 `/plan-and-execute 提示词...`  
