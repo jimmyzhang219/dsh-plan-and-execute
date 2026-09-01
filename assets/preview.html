@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dsh-plan-and-execute 审批卡预览</title>
+<style>
+  /* 预览页背景：模拟 dsh 深色聊天界面（非插件样式） */
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #161618;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    padding: 32px 24px;
+  }
+  /* 以下为插件 styles.ts 注入的 .pae-* 样式（设计令牌取回退值） */
+  .pae-frame { display: flex; justify-content: center; padding: 6px 16px 10px; }
+  .pae-card {
+    display: flex; overflow: hidden; flex-direction: column;
+    width: 100%; max-width: 720px; max-height: min(60vh, 520px);
+    border: 1px solid #d99a26; border-radius: 20px;
+    background: #2a2a2e; box-shadow: 0 8px 28px rgba(0,0,0,.45);
+    color: #f2f2f4;
+  }
+  .pae-card, .pae-card * { box-sizing: border-box; }
+  .pae-strip {
+    display: flex; align-items: center; flex-shrink: 0; gap: 8px;
+    padding: 10px 16px; background: #3a3120; color: #ffd166;
+    font-size: 13px; line-height: 18px;
+  }
+  .pae-dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; }
+  .pae-header-actions { margin-left: auto; display: flex; gap: 8px; }
+  .pae-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+    padding: 12px 16px 4px; font-size: 14px; line-height: 22px;
+  }
+  .pae-summary { margin: 0 0 8px; color: #b6b6bc; }
+  .pae-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .pae-step { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .pae-step-title {
+    flex: none; color: #f2f2f4;
+    text-decoration: underline; text-decoration-color: rgba(242,242,244,.4);
+    text-underline-offset: 3px; cursor: pointer;
+  }
+  .pae-step-title:hover { color: #ffffff; }
+  .pae-step-select {
+    flex: 1 1 auto; min-width: 0; max-width: 260px; margin-left: auto;
+    background: #2a2a2e; color: #f2f2f4;
+    border: 1px solid #4a4a52; border-radius: 8px;
+    padding: 2px 6px; font-size: 13px; line-height: 20px;
+  }
+  .pae-feedback {
+    display: flex; flex-direction: column; gap: 4px; padding: 4px 16px;
+    font-size: 12px; line-height: 16px; color: #b6b6bc;
+  }
+  .pae-feedback-textarea {
+    width: 100%; background: #222226; color: #f2f2f4;
+    border: 1px solid #4a4a52; border-radius: 8px;
+    padding: 6px 8px; font-size: 13px; line-height: 18px; resize: vertical;
+  }
+  .pae-feedback-textarea::placeholder { color: #6f6f78; }
+  .pae-error { min-height: 16px; padding: 0 16px; color: #e5484d; font-size: 11px; line-height: 16px; }
+  .pae-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0; gap: 12px; padding: 8px 16px 12px;
+  }
+  .pae-actions { display: flex; align-items: center; gap: 8px; }
+  /* dsh-client-ui-primitives Button 近似（primary / outline / ghost / sm） */
+  .btn {
+    border-radius: 10px; padding: 5px 14px; font-size: 13px; line-height: 20px;
+    cursor: pointer; border: 1px solid transparent; font-family: inherit;
+  }
+  .btn-sm { padding: 2px 10px; font-size: 12px; line-height: 18px; border-radius: 8px; }
+  .btn-ghost { background: transparent; color: #b6b6bc; }
+  .btn-ghost:hover { color: #f2f2f4; }
+  .btn-outline { background: transparent; color: #ffd166; border-color: rgba(255,209,102,.5); }
+  .btn-outline:hover { background: rgba(255,209,102,.08); }
+  .btn-primary { background: #ffd166; color: #2a2010; font-weight: 600; }
+  .btn-primary:hover { background: #ffdf8a; }
+</style>
+</head>
+<body>
+<div class="pae-frame">
+  <section class="pae-card" data-testid="pae-review-card" aria-label="批准此计划？">
+    <header class="pae-strip">
+      <span class="pae-dot"></span>
+      <strong>计划审批</strong>
+      <span class="pae-header-actions">
+        <button class="btn btn-sm btn-ghost" type="button">打开计划目录</button>
+      </span>
+    </header>
+    <div class="pae-body">
+      <p class="pae-summary">2026 国庆北京 7 天 6 晚出游计划（一家三口 · 自驾 · 预算 15,000 元）</p>
+      <ol class="pae-steps">
+        <li class="pae-step">
+          <span class="pae-step-title">1. 需求分析与会话初始化</span>
+          <select class="pae-step-select" value="deepseek-official|deepseek-v4-flash">
+            <option>deepseek-official · deepseek-v4-flash</option>
+          </select>
+        </li>
+        <li class="pae-step">
+          <span class="pae-step-title">2. 每日行程编排</span>
+          <select class="pae-step-select" value="deepseek-official|deepseek-v4-flash">
+            <option>deepseek-official · deepseek-v4-flash</option>
+          </select>
+        </li>
+        <li class="pae-step">
+          <span class="pae-step-title">3. 停车与住宿方案 ⚠</span>
+          <select class="pae-step-select" value="deepseek-official|deepseek-v4-flash">
+            <option>deepseek-official · deepseek-v4-flash</option>
+          </select>
+        </li>
+        <li class="pae-step">
+          <span class="pae-step-title">4. 费用预算核对</span>
+          <select class="pae-step-select" value="deepseek-official|deepseek-v4-flash">
+            <option>deepseek-official · deepseek-v4-flash</option>
+          </select>
+        </li>
+      </ol>
+      <label class="pae-feedback">
+        驳回反馈
+        <textarea class="pae-feedback-textarea" placeholder="选「继续修改」时附上反馈，可选"></textarea>
+      </label>
+      <div class="pae-error" role="status"></div>
+    </div>
+    <footer class="pae-footer">
+      <span class="pae-actions">
+        <button class="btn btn-ghost" type="button">讨论</button>
+      </span>
+      <span class="pae-actions">
+        <button class="btn btn-outline" type="button">继续修改</button>
+        <button class="btn btn-primary" type="button">批准</button>
+      </span>
+    </footer>
+  </section>
+</div>
+</body>
+</html>

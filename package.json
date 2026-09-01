@@ -4,6 +4,10 @@
   "description": "dsh plugin: plan-and-execute orchestration over ReactLoopAgent",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jimmyzhang219/dsh-plan-and-execute.git"
+  },
   "engines": {
     "node": ">=22.19"
   },
