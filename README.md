@@ -5,6 +5,7 @@ Plan-and-Execute orchestration plugin for DeepSeek Harness (dsh).
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6.svg?logo=typescript&logoColor=white)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.19-339933.svg?logo=nodedotjs&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 <p align="center"><em>by Jimmy Zhang</em></p>
 
