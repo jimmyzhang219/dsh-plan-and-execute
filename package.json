@@ -1,6 +1,6 @@
 {
   "name": "dsh-plan-and-execute",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "dsh plugin: plan-and-execute orchestration over ReactLoopAgent",
   "type": "module",
   "license": "MIT",
@@ -20,7 +20,8 @@
     "./client": {
       "types": "./lib/client/index.d.cts",
       "default": "./lib/client/index.cjs"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "lib",
@@ -48,8 +49,6 @@
         "slots",
         "locale",
         "remote",
-        "remote.session",
-        "remote.settings",
         "connection"
       ]
     }
