@@ -8,6 +8,8 @@
  * （turn/*、todo/write）。
  * @module dsh-plan-and-execute/orchestrator
  */
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
@@ -24,10 +26,13 @@ import {
   kickoffInstruction,
   nudgeInstruction,
   planReviewDetail,
+  planSummaryContextMessage,
   recoverInstruction,
+  replanContextMessage,
   replanInstruction,
   resumePlanningInstruction,
   stepInstruction,
+  stepReportContextMessage,
   userTaskMessage,
 } from './prompts.ts'
 import {
@@ -39,14 +44,36 @@ import {
   type PaeStepModel,
   type PaeStepReportPayload,
   type PlanStep,
+  type StepReportStatus,
 } from './state.ts'
 
-/** 窄化后的会话面：事件日志 + todo 整表写入（真实 Session 的适配在 src/index.ts）。 */
+/** 当前 surface 折叠视图（模型可见消息序列的事件 seq 列表）。 */
+export interface DriveSurface {
+  /** surface 上的节点事件 seq（模型可见顺序）。 */
+  readonly nodes: readonly number[]
+  /** 位置替换提交计数（单调递增；变化即新一轮消息序列）。 */
+  readonly replaceGeneration: number
+}
+
+/** 窄化后的会话面：事件日志 + todo 整表写入 + 消息历史锚定（真实 Session 的适配在 src/index.ts）。 */
 export interface DriveSession {
   /** 标准事件日志（仅宿主白名单事件；pae/* 不在此）。 */
   readonly events: readonly SessionEvent[]
+  /** 当前 surface 折叠视图（模型可见消息序列）。 */
+  readonly surface: DriveSurface
   /** 写 `todo/write` 整表快照（宿主内置事件）。 */
   writeTodos(todos: readonly TodoItem[]): void
+  /**
+   * 以 replace surfaceOp 追加一条 user/message，遮蔽 surface 上 [start..end] 的
+   * 节点区间（start/end 为当前 surface 节点 seq；sourceEventSeqs 须包含每个被遮蔽节点）。
+   * 仅影响模型投影（deriveMessages），事件日志与 UI 轨迹保留。返回新事件 seq。
+   */
+  replaceSurface(
+    message: UserMessage,
+    start: number,
+    end: number,
+    sourceEventSeqs: number[],
+  ): number
 }
 
 /** 窄化后的 Agent 驱动面：注入消息 + 等待回合空闲（settle 依赖）。 */
@@ -118,6 +145,8 @@ interface RuntimeState {
   stepModels: Map<number, PaeStepModel>
   /** 被跳过（skip）的步骤号集合。 */
   skipped: Set<number>
+  /** 各步上下文锚定消息的事件 seq（键为 1-based 步号；判定"本步已锚定"以保持上下文）。 */
+  anchorSeqs: Map<number, number>
 }
 
 /**
@@ -145,6 +174,7 @@ export class Orchestrator {
     statuses: new Map(),
     stepModels: new Map(),
     skipped: new Set(),
+    anchorSeqs: new Map(),
   }
 
   /**
@@ -221,13 +251,15 @@ export class Orchestrator {
     this.state.statuses.clear()
     this.state.stepModels.clear()
     this.state.skipped.clear()
+    this.state.anchorSeqs.clear()
     this.reportSeq = 0
     this.reportWatermark = 0
     this.stepAttempt = 0
     await this.save()
-    // 用户原文以 kind='user' 先注入（轨迹「用户」行，与 /plan 同语义），
-    // 再注入插件编排指令（kind='plugin'，轨迹「上下文」行）。
-    this.deps.agent.steer(userTaskMessage(task))
+    // 新编排以整面 replace 锚定任务原文（遮蔽旧会话历史对模型可见的部分；
+    // 事件日志与 UI 轨迹保留，同会话二次运行自动隔离），再注入 kickoff 指令
+    // （kind='plugin'，轨迹「上下文」行）。锚定与 steer 须同一同步 tick 相邻执行。
+    this.replaceAll(userTaskMessage(task))
     this.deps.agent.steer(kickoffInstruction(task, this.deps.planDir))
     this.armApproval()
   }
@@ -298,12 +330,15 @@ export class Orchestrator {
     const item = answer.answers.find((entry) => entry.id === 'pae-approve')
     if (item?.selected[0] !== APPROVE_LABEL) {
       const feedback = item?.custom?.trim()
+      const discipline =
+        '修订纪律：先用只读工具重新读取（read）要修改的步骤文件确认最新内容，再修改；' +
+        '反馈中新增的独立任务/事项必须新建独立步骤文件（step-NN-*.md），不要并入现有步骤。'
       return {
         approved: false,
         error:
           feedback && feedback !== ''
-            ? `用户要求继续修改计划，反馈：${feedback}`
-            : '用户要求继续修改计划；请调整后重新提交。',
+            ? `用户要求继续修改计划，反馈：${feedback}。${discipline}`
+            : `用户要求继续修改计划；请调整后重新提交。${discipline}`,
       }
     }
     const plan: PaePlanPayload = {
@@ -318,6 +353,7 @@ export class Orchestrator {
     this.state.statuses.clear()
     // 不清空 stepModels：批准非新计划（begin/enterReplan 已覆盖），审批前设置须存活到执行期
     this.state.skipped.clear()
+    this.state.anchorSeqs.clear()
     await this.save()
     this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
     this.approval?.resolve(plan)
@@ -376,25 +412,42 @@ export class Orchestrator {
   }
 
   /** report_step 工具入口（按显式步号；步号由编排器判定，防伪造）。 */
-  async reportStep(stepIndex: number, outcome: 'done' | 'blocked', summary: string): Promise<void> {
+  async reportStep(
+    stepIndex: number,
+    status: StepReportStatus,
+    artifacts: readonly string[],
+    summary: string,
+    exitCode?: number,
+  ): Promise<void> {
     const folded = this.folded()
     if (folded.phase !== 'executing' || folded.stepIndex !== stepIndex) {
       throw new Error(
         `report_step 与当前执行步骤不符（当前：第 ${folded.stepIndex ?? '?'} 步，收到：第 ${stepIndex} 步）`,
       )
     }
-    this.state.stepReports.set(stepIndex, { stepIndex, outcome, summary })
+    this.state.stepReports.set(stepIndex, {
+      stepIndex,
+      status,
+      artifacts: [...artifacts],
+      summary,
+      ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+    })
     this.reportSeq += 1
     await this.save()
   }
 
   /** report_step 工具入口：步号取折叠状态中的当前步。 */
-  async reportStepForCurrent(outcome: 'done' | 'blocked', summary: string): Promise<void> {
+  async reportStepForCurrent(
+    status: StepReportStatus,
+    artifacts: readonly string[],
+    summary: string,
+    exitCode?: number,
+  ): Promise<void> {
     const folded = this.folded()
     if (folded.phase !== 'executing' || folded.stepIndex === undefined || folded.stepIndex === 0) {
       throw new Error('report_step 仅在执行阶段的当前步骤内可用')
     }
-    await this.reportStep(folded.stepIndex, outcome, summary)
+    await this.reportStep(folded.stepIndex, status, artifacts, summary, exitCode)
   }
 
   /** 注入指令后等待本步结局。 */
@@ -413,6 +466,57 @@ export class Orchestrator {
     return classifyOutcome(turnEndKind, freshReport)
   }
 
+  /** 整面 replace：以一条上下文消息遮蔽当前 surface 全部节点（surface 为空时退化为仅注入）。 */
+  private replaceAll(message: UserMessage): void {
+    const nodes = [...this.session.surface.nodes]
+    if (nodes.length === 0) {
+      this.deps.agent.steer(message)
+      return
+    }
+    this.session.replaceSurface(message, nodes[0]!, nodes[nodes.length - 1]!, nodes)
+  }
+
+  /**
+   * 幂等锚定本步上下文：已锚定且锚点仍在 surface（未被宿主 compaction 遮蔽）→
+   * 跳过（暂停恢复/revive 保持当前步上下文）；否则整面 replace 并记录锚点 seq。
+   * 仅修改 surface（模型投影），事件日志与 UI 轨迹保留。
+   */
+  private ensureStepAnchor(i: number, plan: PaePlanPayload): void {
+    const nodes = [...this.session.surface.nodes]
+    if (nodes.length === 0) return
+    const anchoredSeq = this.state.anchorSeqs.get(i)
+    if (anchoredSeq !== undefined && nodes.includes(anchoredSeq)) return
+    const seq = this.session.replaceSurface(
+      this.stepContextMessage(i, plan),
+      nodes[0]!,
+      nodes[nodes.length - 1]!,
+      nodes,
+    )
+    this.state.anchorSeqs.set(i, seq)
+  }
+
+  /** 步上下文消息：首步=计划摘要；后续=上一步 StepReport（缺报告时合成 skip/next 说明）。 */
+  private stepContextMessage(i: number, plan: PaePlanPayload): UserMessage {
+    if (i === 1) return planSummaryContextMessage(plan)
+    const total = plan.steps.length
+    const prevTitle = plan.steps[i - 2]?.title ?? ''
+    const prev = this.state.stepReports.get(i - 1)
+    if (prev !== undefined) return stepReportContextMessage(i - 1, total, prevTitle, prev)
+    return stepReportContextMessage(i - 1, total, prevTitle, {
+      stepIndex: i - 1,
+      status: 'failed',
+      artifacts: [],
+      summary: this.state.skipped.has(i - 1)
+        ? '该步被用户跳过，未执行'
+        : '上一步未汇报结局（用户选择继续下一步）',
+    })
+  }
+
+  /** 读取步骤文件内容（供指令内嵌；失败即结构性暂停分支）。 */
+  private async readStepContent(planDir: string, file: string): Promise<string> {
+    return await readFile(join(planDir, file), 'utf8')
+  }
+
   /** 更新某步 todo 状态并整表重写（statuses 单点修改入口）。 */
   private mark(stepIndex: number, status: TodoItem['status'], plan: PaePlanPayload): void {
     this.state.statuses.set(stepIndex, status)
@@ -428,14 +532,16 @@ export class Orchestrator {
     while (i <= total) {
       if (this.disposed) return
       const step = plan.steps[i - 1]!
-      // 结构性问题（文件悬空）不自动处理：直接暂停
-      const check = await validateManifest(plan.planDir, [step])
-      if (!check.ok) {
+      // 步骤文件读取失败（缺失/不可读）属于结构性问题：不自动处理，直接暂停
+      let stepContent: string
+      try {
+        stepContent = await this.readStepContent(plan.planDir, step.file)
+      } catch {
         const choice = await this.pause(
           'failure',
           i,
           plan,
-          `步骤文件校验失败：${check.issues[0]?.problem ?? '文件不可用'}`,
+          `步骤文件读取失败：${plan.planDir}/${step.file} 不存在或不可读`,
         )
         if (choice === 'terminate') return this.finish('aborted', plan)
         if (choice === 'replan') return this.enterReplan(plan)
@@ -466,9 +572,12 @@ export class Orchestrator {
       this.state.phase = 'executing'
       this.state.stepIndex = i
       this.stepAttempt += 1
+      // 锚定本步上下文（首步=计划摘要；后续=上一步 StepReport），遮蔽旧历史；
+      // 与下方 steer 同一同步 tick 相邻执行，模型下一次请求只见 [上下文, 步骤指令]。
+      this.ensureStepAnchor(i, plan)
       await this.save()
       this.mark(i, 'in_progress', plan)
-      this.deps.agent.steer(stepInstruction(i, total, step, plan.planDir))
+      this.deps.agent.steer(stepInstruction(i, total, step, plan.planDir, stepContent))
       this.reportWatermark = this.reportSeq
       let outcome = await this.settle(i)
       let action = decideAction(outcome, { nudged, recoveries, policy: this.deps.config })
@@ -501,10 +610,11 @@ export class Orchestrator {
           }
           if (choice === 'dismissed') return // 保持 paused：用户搁置弹窗，等命令重入或 revive
           // retry：恢复 executing（pause 已把状态置为 paused）并重新注入本步指令
+          // （不锚定：保持当前步上下文，stepContent 已在本轮循环顶部读取）
           this.state.phase = 'executing'
           this.stepAttempt += 1
           await this.save()
-          this.deps.agent.steer(stepInstruction(i, total, step, plan.planDir))
+          this.deps.agent.steer(stepInstruction(i, total, step, plan.planDir, stepContent))
           this.reportWatermark = this.reportSeq
           outcome = await this.settle(i)
           action = decideAction(outcome, { nudged, recoveries, policy: this.deps.config })
@@ -561,13 +671,14 @@ export class Orchestrator {
     return 'dismissed'
   }
 
-  /** 回到规划阶段：清计划、注入 replan 指令（携带最近反馈）、重新挂起审批。 */
+  /** 回到规划阶段：清计划、以整面 replace 锚定反馈上下文、注入 replan 指令、重新挂起审批。 */
   private async enterReplan(plan: PaePlanPayload): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
     this.state.stepModels.clear()
     await this.save()
-    this.deps.agent.steer(replanInstruction(this.lastFeedback, plan.steps.length))
+    this.replaceAll(replanContextMessage(this.lastFeedback, plan))
+    this.deps.agent.steer(replanInstruction(plan.steps.length))
     this.armApproval()
   }
 
@@ -704,6 +815,7 @@ export class Orchestrator {
     this.state.statuses = restored.statuses
     this.state.stepModels = restored.stepModels
     this.state.skipped = restored.skipped
+    this.state.anchorSeqs = restored.anchorSeqs
     this.reportSeq = restored.stepReports.size
     this.reportWatermark = this.reportSeq
   }

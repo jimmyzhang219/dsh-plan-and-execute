@@ -37,6 +37,8 @@ export interface PersistedOrchestratorState {
   readonly stepModels?: Readonly<Record<number, PaeStepModel>>
   /** 被跳过（skip）的步骤号集合。 */
   readonly skipped: readonly number[]
+  /** 各步上下文锚定消息的事件 seq（键为 1-based 步号；旧文件缺省）。 */
+  readonly anchorSeqs?: Readonly<Record<number, number>>
 }
 
 /** 状态文件名（位于 planDir 下）。 */
@@ -97,6 +99,7 @@ export function snapshotState(state: {
   statuses: ReadonlyMap<number, TodoItem['status']>
   stepModels: ReadonlyMap<number, PaeStepModel>
   skipped: ReadonlySet<number>
+  anchorSeqs: ReadonlyMap<number, number>
 }): PersistedOrchestratorState {
   return {
     phase: state.phase as PaePhase,
@@ -109,20 +112,39 @@ export function snapshotState(state: {
     statuses: Object.fromEntries(state.statuses) as Record<number, TodoItem['status']>,
     ...(state.stepModels.size === 0 ? {} : { stepModels: Object.fromEntries(state.stepModels) }),
     skipped: [...state.skipped],
+    ...(state.anchorSeqs.size === 0 ? {} : { anchorSeqs: Object.fromEntries(state.anchorSeqs) }),
   }
 }
 
-/** 从持久化快照恢复内存集合。 */
+/** 从持久化快照恢复内存集合（旧版 outcome 字段迁移为新 status 协议）。 */
 export function restoreState(persisted: PersistedOrchestratorState): {
   stepReports: Map<number, PaeStepReportPayload>
   statuses: Map<number, TodoItem['status']>
   stepModels: Map<number, PaeStepModel>
   skipped: Set<number>
+  anchorSeqs: Map<number, number>
 } {
   return {
-    stepReports: new Map(persisted.stepReports.map((report) => [report.stepIndex, report])),
+    stepReports: new Map(
+      persisted.stepReports.map((report) => {
+        const legacy = report as PaeStepReportPayload & { outcome?: 'done' | 'blocked' }
+        if (legacy.status === undefined && legacy.outcome !== undefined) {
+          return [
+            report.stepIndex,
+            {
+              stepIndex: report.stepIndex,
+              status: legacy.outcome === 'done' ? 'success' : 'failed',
+              artifacts: [],
+              summary: legacy.summary,
+            },
+          ] as const
+        }
+        return [report.stepIndex, report] as const
+      }),
+    ),
     statuses: new Map(Object.entries(persisted.statuses).map(([k, v]) => [Number(k), v])),
     stepModels: new Map(Object.entries(persisted.stepModels ?? {}).map(([k, v]) => [Number(k), v])),
     skipped: new Set(persisted.skipped),
+    anchorSeqs: new Map(Object.entries(persisted.anchorSeqs ?? {}).map(([k, v]) => [Number(k), v])),
   }
 }

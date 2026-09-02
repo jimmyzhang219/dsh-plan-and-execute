@@ -2,22 +2,47 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-import type { DriveAgent, DriveSession, Orchestrator } from '../src/orchestrator.ts'
+import type { DriveAgent, DriveSession, DriveSurface, Orchestrator } from '../src/orchestrator.ts'
 import type { PersistedOrchestratorState, PersistedStorage } from '../src/persist.ts'
 
 export const tempDirs: string[] = []
+
+/** 构造最小插件消息（surface 锚定/注入测试用）。 */
+export function fakeUserMessage(text: string): UserMessage {
+  return createUserMessage({
+    content: [{ type: 'text', text }],
+    source: {
+      kind: 'plugin',
+      plugin: 'dsh-plan-and-execute',
+      form: 'instructions',
+      summary: text.slice(0, 40),
+    },
+  })
+}
 
 export async function cleanupTempDirs(): Promise<void> {
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
 }
 
-/** 假 Session：标准事件日志（turn/*）+ todo/write 收集；pae/* 事件不再写入。 */
+/** 假 Session：标准事件日志（turn/*）+ todo/write 收集 + 最小 surface 折叠模型。 */
 export class FakeSession implements DriveSession {
   readonly events: SessionEvent[] = []
   todosWrites: TodoItem[][] = []
+  /** surface 节点（模型可见消息的事件 seq，模拟宿主折叠视图）。 */
+  readonly nodes: number[] = []
+  /** replace 提交计数（宿主 replaceGeneration 语义）。 */
+  replaceGeneration = 0
+  /** replaceSurface 调用记录（测试断言锚定次数/内容）。 */
+  replaceCalls: Array<{
+    message: UserMessage
+    start: number
+    end: number
+    sourceEventSeqs: number[]
+  }> = []
   private seq = 0
 
   append(eventType: 'turn/start' | 'turn/end', data: object): void {
@@ -25,8 +50,41 @@ export class FakeSession implements DriveSession {
     this.events.push({ seq: this.seq, type: eventType, data } as SessionEvent)
   }
 
+  /** 模拟宿主把一条 user/message append 进会话与 surface（steer 展开的简化）。 */
+  pushUserMessage(message: UserMessage): number {
+    this.seq += 1
+    this.events.push({ seq: this.seq, type: 'user/message', data: message } as SessionEvent)
+    this.nodes.push(this.seq)
+    return this.seq
+  }
+
+  /** 折叠视图（DriveSurface 形状）。 */
+  get surface(): DriveSurface {
+    return { nodes: this.nodes, replaceGeneration: this.replaceGeneration }
+  }
+
   writeTodos(todos: readonly TodoItem[]): void {
     this.todosWrites.push([...todos])
+  }
+
+  /** replace surfaceOp：遮蔽 [start..end] 节点区间并记录调用（start/end 不在 surface 上抛错）。 */
+  replaceSurface(
+    message: UserMessage,
+    start: number,
+    end: number,
+    sourceEventSeqs: number[],
+  ): number {
+    this.seq += 1
+    this.events.push({ seq: this.seq, type: 'user/message', data: message } as SessionEvent)
+    const startIdx = this.nodes.indexOf(start)
+    const endIdx = this.nodes.indexOf(end)
+    if (startIdx === -1 || endIdx === -1) {
+      throw new Error(`fake replaceSurface: 节点 ${start}..${end} 不在 surface 上`)
+    }
+    this.nodes.splice(startIdx, endIdx - startIdx + 1, this.seq)
+    this.replaceGeneration += 1
+    this.replaceCalls.push({ message, start, end, sourceEventSeqs })
+    return this.seq
   }
 }
 
@@ -43,6 +101,7 @@ export class FakeAgent implements DriveAgent {
 
   steer(message: UserMessage): void {
     this.steered.push(message)
+    this.session.pushUserMessage(message) // 模拟宿主把 steer 消息 append 进 surface
   }
 
   whenIdle(): Promise<void> {

@@ -3,9 +3,9 @@ import { classifyOutcome, decideAction } from '../src/decision.ts'
 
 describe('classifyOutcome', () => {
   it('turn aborted → aborted（优先于 report）', () => {
-    expect(classifyOutcome('aborted', { stepIndex: 1, outcome: 'done', summary: 'x' })).toBe(
-      'aborted',
-    )
+    expect(
+      classifyOutcome('aborted', { stepIndex: 1, status: 'success', artifacts: [], summary: 'x' }),
+    ).toBe('aborted')
   })
   it('turn error / max-tokens / interrupted → failed', () => {
     for (const kind of ['error', 'max-tokens', 'interrupted']) {
@@ -13,12 +13,17 @@ describe('classifyOutcome', () => {
     }
   })
   it('completed + 本步 report → done/blocked；无 report → missing-report', () => {
-    expect(classifyOutcome('completed', { stepIndex: 1, outcome: 'done', summary: 's' })).toBe(
-      'done',
-    )
-    expect(classifyOutcome('completed', { stepIndex: 1, outcome: 'blocked', summary: 's' })).toBe(
-      'blocked',
-    )
+    expect(
+      classifyOutcome('completed', {
+        stepIndex: 1,
+        status: 'success',
+        artifacts: [],
+        summary: 's',
+      }),
+    ).toBe('done')
+    expect(
+      classifyOutcome('completed', { stepIndex: 1, status: 'failed', artifacts: [], summary: 's' }),
+    ).toBe('blocked')
     expect(classifyOutcome('completed', undefined)).toBe('missing-report')
   })
   it('无 turn/end 但无 report → missing-report', () => {

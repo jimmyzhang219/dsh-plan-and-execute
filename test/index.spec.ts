@@ -103,6 +103,7 @@ const fakeAgent = (_phase: 'none' | PaePhase) => ({
     id: 'sess-1',
     header: { cwd },
     events: [] as SessionEvent[],
+    surface: { nodes: [], replaceGeneration: 0 },
     append: vi.fn((_type: string, _data: object) => {}),
   },
 })

@@ -50,13 +50,23 @@ export const Config: Schema<Config> = Schema.object({
   planDir: Schema.string().description('计划文件根目录（相对会话 cwd）').default('.pae'),
 })
 
-/** 真 Agent → 窄结构接口的唯一适配点（todo/write 是宿主白名单事件）。 */
+/** 真 Agent → 窄结构接口的唯一适配点（todo/write 与 surface replace 均为宿主公开 API）。 */
 function toDriveAgent(agent: Agent): DriveAgent {
   const session = agent.session
   const drive: DriveSession = {
     events: session.events,
+    surface: session.surface,
     writeTodos: (todos) => {
       session.append('todo/write', { todos: [...todos] })
+    },
+    // 以 replace surfaceOp 追加 user/message，遮蔽 [start..end] surface 节点区间
+    // （仅裁剪模型投影 deriveMessages；事件日志与 UI 轨迹保留，restore 时重放）。
+    replaceSurface: (message, start, end, sourceEventSeqs) => {
+      const event = session.append('user/message', message, {
+        surfaceOp: { op: 'replace', start, end },
+        sourceEventSeqs,
+      })
+      return event.seq
     },
   }
   return {

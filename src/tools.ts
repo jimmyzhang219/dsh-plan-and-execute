@@ -110,11 +110,31 @@ export function createReportStepTool(lookup: OrchestratorLookup) {
   return defineTool({
     name: 'report_step',
     description:
-      'Plan-and-Execute 执行阶段专用：汇报当前步骤结局。done=已完成本步全部工作；' +
-      'blocked=本步无法完成（summary 写原因）。每步结束前必须调用。',
+      'Plan-and-Execute 执行阶段专用：汇报当前步骤结局。success=已完成本步全部工作；' +
+      'failed=本步无法完成/受阻（summary 写原因）。每步结束前必须调用。' +
+      'artifacts 列出本步产出/涉及的文件路径（相对会话 cwd，可为空数组）；' +
+      'summary 为尽量不超过 200 字的抽象描述，不含原文复现。',
     parameters: {
-      outcome: { type: 'string', required: true, description: "'done' 或 'blocked'" },
-      summary: { type: 'string', required: true, description: '一两句结果/原因（改动要点、产出）' },
+      status: {
+        type: 'string',
+        required: true,
+        description: "'success' 或 'failed'（failed 涵盖受阻）",
+      },
+      artifacts: {
+        type: 'array',
+        required: true,
+        description: '本步产出/涉及的文件路径数组（相对会话 cwd；无产出可为空数组）',
+        items: { type: 'string' },
+      },
+      summary: {
+        type: 'string',
+        required: true,
+        description: '本步结果抽象描述，尽量不超过 200 字（中英通算），不含原文复现',
+      },
+      exit_code: {
+        type: 'number',
+        description: '最后命令的退出码（0=成功；受阻等无命令场景可省略）',
+      },
     },
     output: {
       schema: {
@@ -125,23 +145,45 @@ export function createReportStepTool(lookup: OrchestratorLookup) {
       // 结果文本：收到即已记录。
       render: (_args, value) => [{ type: 'text', text: value.received ? '已记录。' : '未记录。' }],
     },
-    // 执行：outcome 校验 + 步号由编排器判定（reportStepForCurrent，防伪造）；无编排时抛错。
+    // 执行：status/artifacts/summary/exit_code 校验 + 步号由编排器判定（reportStepForCurrent，防伪造）；无编排时抛错。
     execute: async (args, exec) => {
       if (exec.agent === undefined) throw new Error('report_step 需要调用 agent')
       const orchestrator = lookup(exec.agent.session as object)
       if (orchestrator === undefined) {
         throw new Error('当前会话没有进行中的 plan-and-execute 编排')
       }
-      if (args.outcome !== 'done' && args.outcome !== 'blocked') {
-        throw new Error(`outcome 必须是 'done' 或 'blocked'（收到：${args.outcome}）`)
+      if (args.status !== 'success' && args.status !== 'failed') {
+        throw new Error(`status 必须是 'success' 或 'failed'（收到：${args.status}）`)
       }
-      orchestrator.reportStepForCurrent(args.outcome, args.summary)
+      if (!Array.isArray(args.artifacts) || args.artifacts.length > 20) {
+        throw new Error('artifacts 必须是数组且不超过 20 项')
+      }
+      for (const artifact of args.artifacts) {
+        if (typeof artifact !== 'string' || artifact === '' || Array.from(artifact).length > 120) {
+          throw new Error('artifacts 每项必须是非空字符串且不超过 120 字')
+        }
+      }
+      if (typeof args.summary !== 'string' || args.summary === '') {
+        throw new Error('summary 不能为空')
+      }
+      if (args.exit_code !== undefined) {
+        if (!Number.isSafeInteger(args.exit_code)) {
+          throw new Error(`exit_code 必须是整数（收到：${args.exit_code}）`)
+        }
+        if (args.status === 'success' && args.exit_code !== 0) {
+          throw new Error('status=success 时 exit_code 必须为 0')
+        }
+        if (args.status === 'failed' && args.exit_code === 0) {
+          throw new Error('status=failed 时 exit_code 不能为 0')
+        }
+      }
+      orchestrator.reportStepForCurrent(args.status, args.artifacts, args.summary, args.exit_code)
       return { received: true }
     },
     // 调用侧卡片：结局标签 + 汇报摘要。
     presentCall: (args) => ({
       card: 'generic',
-      title: `步骤汇报：${args.outcome}`,
+      title: `步骤汇报：${args.status}`,
       kind: 'other',
       content: [{ type: 'text', text: args.summary }],
     }),

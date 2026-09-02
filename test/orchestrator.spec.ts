@@ -7,6 +7,7 @@ import {
   fakeAsk,
   FakeRevivedSession,
   FakeStorage,
+  fakeUserMessage,
   makeOrchestrator,
   type StepSeed,
 } from './helpers.ts'
@@ -24,7 +25,9 @@ async function orchestratorTurn(
   orchestrator: Orchestrator,
   agent: FakeAgent,
   reason: string,
-  report: { outcome: 'done' | 'blocked'; summary: string } | undefined,
+  report:
+    | { status: 'success' | 'failed'; artifacts?: string[]; summary: string; exit_code?: number }
+    | undefined,
   stepIndex: number,
   stepAttempt: number,
 ): Promise<void> {
@@ -39,7 +42,12 @@ async function orchestratorTurn(
         throw new Error(`step ${stepIndex} attempt ${stepAttempt} not started`)
       }
     })
-    await orchestrator.reportStepForCurrent(report.outcome, report.summary)
+    await orchestrator.reportStepForCurrent(
+      report.status,
+      report.artifacts ?? [],
+      report.summary,
+      report.exit_code,
+    )
   }
   agent.scriptTurn(reason)
 }
@@ -90,7 +98,7 @@ describe('主执行路径', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: '完成 A' },
+      { status: 'success', summary: '完成 A' },
       1,
       1,
     )
@@ -105,7 +113,7 @@ describe('主执行路径', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: '完成 B' },
+      { status: 'success', summary: '完成 B' },
       2,
       2,
     )
@@ -141,7 +149,7 @@ describe('异常路径', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: '补报' },
+      { status: 'success', summary: '补报' },
       1,
       1,
     ) // 追问后：补报
@@ -166,7 +174,7 @@ describe('暂停与恢复决策', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'blocked', summary: '卡住' },
+      { status: 'failed', summary: '卡住' },
       1,
       1,
     )
@@ -174,7 +182,7 @@ describe('暂停与恢复决策', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: '重试成功' },
+      { status: 'success', summary: '重试成功' },
       1,
       2,
     )
@@ -221,7 +229,7 @@ describe('暂停与恢复决策', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'blocked', summary: '第一次' },
+      { status: 'failed', summary: '第一次' },
       1,
       1,
     )
@@ -229,7 +237,7 @@ describe('暂停与恢复决策', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'blocked', summary: '第二次' },
+      { status: 'failed', summary: '第二次' },
       1,
       1,
     ) // 超限（recover 不重注入步骤指令，attempt 不变）
@@ -252,7 +260,7 @@ describe('暂停与恢复决策', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'blocked', summary: '卡住' },
+      { status: 'failed', summary: '卡住' },
       1,
       1,
     )
@@ -260,7 +268,7 @@ describe('暂停与恢复决策', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: 'B 完成' },
+      { status: 'success', summary: 'B 完成' },
       2,
       2,
     )
@@ -279,7 +287,7 @@ describe('确认点 / replan / revive', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: 'A 完成' },
+      { status: 'success', summary: 'A 完成' },
       1,
       1,
     )
@@ -301,7 +309,7 @@ describe('确认点 / replan / revive', () => {
     expect(texts.some((t) => t.includes('执行计划第 1/1 步'))).toBe(false)
   })
 
-  it('暂停选回到计划阶段 → planning 状态 + replan 指令（含反馈）', async () => {
+  it('暂停选回到计划阶段 → planning 状态 + replan 上下文（含反馈，锚定消息）+ replan 指令', async () => {
     const { orchestrator, agent, storage } = await makeOrchestrator(
       [{ file: 'a.md', title: 'A' }],
       [answer('pae-approve', '批准'), answer('pae-pause', '回到计划阶段', '加一步测试')],
@@ -310,15 +318,18 @@ describe('确认点 / replan / revive', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'blocked', summary: '卡住' },
+      { status: 'failed', summary: '卡住' },
       1,
       1,
     )
     await vi.waitFor(() => {
       expect(storage.state?.phase).toBe('planning')
     })
+    // 反馈在整面 replace 的上下文消息里（模型可见），指令正文不再重复
+    const context = agent.session.replaceCalls.at(-1)
+    expect((context?.message.content[0] as { text: string }).text).toContain('加一步测试')
     const last = agent.steered.at(-1)
-    expect((last?.content[0] as { text: string }).text).toContain('加一步测试')
+    expect((last?.content[0] as { text: string }).text).toContain('回到规划阶段')
   })
 
   it('revive：executing 中断 → 断点续跑弹窗，从当前步重注入', async () => {
@@ -340,7 +351,7 @@ describe('确认点 / replan / revive', () => {
       revived.agent,
       'completed',
       {
-        outcome: 'done',
+        status: 'success',
         summary: '续跑',
       },
       1,
@@ -351,7 +362,7 @@ describe('确认点 / replan / revive', () => {
       revived.agent,
       'completed',
       {
-        outcome: 'done',
+        status: 'success',
         summary: '完成',
       },
       2,
@@ -423,7 +434,7 @@ describe('生命周期钩子', () => {
       orchestrator,
       agent,
       'completed',
-      { outcome: 'done', summary: '完成' },
+      { status: 'success', summary: '完成' },
       1,
       1,
     )
@@ -656,5 +667,204 @@ describe('applyStepModels / stepModelFor', () => {
     if (!out.ok) expect(out.error).toContain('超出计划范围')
     revived.resolveResume(answer('pae-pause', '终止'))
     await revivePromise
+  })
+})
+
+describe('消息隔离（surface 锚定）', () => {
+  it('每步恰好一次整面 replace：首步锚定计划摘要，次步锚定上一步报告', async () => {
+    const { orchestrator, agent } = await makeOrchestrator(
+      [
+        { file: 'a.md', title: 'A' },
+        { file: 'b.md', title: 'B' },
+      ],
+      [answer('pae-approve', '批准')],
+    )
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'success', artifacts: ['a.md'], summary: '完成 A' },
+      1,
+      1,
+    )
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'success', summary: '完成 B' },
+      2,
+      2,
+    )
+    await vi.waitFor(() => {
+      expect(agent.session.todosWrites.at(-1)).toEqual([
+        { content: '1. A', status: 'completed' },
+        { content: '2. B', status: 'completed' },
+      ])
+    })
+    const calls = agent.session.replaceCalls
+    expect(calls).toHaveLength(2)
+    // 首步：整面遮蔽 begin 注入的任务+kickoff（seq 1..2）
+    expect(calls[0]).toMatchObject({ start: 1, end: 2, sourceEventSeqs: [1, 2] })
+    expect((calls[0]!.message.content[0] as { text: string }).text).toContain(
+      '[plan-and-execute 计划摘要]',
+    )
+    // 次步：遮蔽首步上下文+指令（seq 3..4），携带上一步报告
+    expect(calls[1]).toMatchObject({ start: 3, end: 4, sourceEventSeqs: [3, 4] })
+    const step2Context = (calls[1]!.message.content[0] as { text: string }).text
+    expect(step2Context).toContain('上一步结果：第 1/2 步（A）')
+    expect(step2Context).toContain('完成 A')
+  })
+
+  it('nudge/recover/retry 不产生新锚定（同一步上下文保持）', async () => {
+    // nudge 路径：缺报追问只 steer
+    const { orchestrator: orch1, agent: agent1 } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+    )
+    agent1.scriptTurn('completed') // 首回合缺报 → nudge
+    await orchestratorTurn(orch1, agent1, 'completed', { status: 'success', summary: '补报' }, 1, 1)
+    await vi.waitFor(() => {
+      expect(orch1.snapshot().phase).toBe('completed')
+    })
+    expect(agent1.session.replaceCalls).toHaveLength(1)
+    // retry 路径：暂停选重试，重新注入指令但不锚定
+    const { orchestrator: orch2, agent: agent2 } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '重试该步')],
+    )
+    await orchestratorTurn(orch2, agent2, 'completed', { status: 'failed', summary: '卡住' }, 1, 1)
+    await orchestratorTurn(
+      orch2,
+      agent2,
+      'completed',
+      { status: 'success', summary: '重试成功' },
+      1,
+      2,
+    )
+    await vi.waitFor(() => {
+      expect(orch2.snapshot().phase).toBe('completed')
+    })
+    expect(agent2.session.replaceCalls).toHaveLength(1) // 只有首步锚定
+  })
+
+  it('skip 后下一步上下文为合成报告（「被跳过」而非计划摘要）', async () => {
+    const { orchestrator, agent } = await makeOrchestrator(
+      [
+        { file: 'a.md', title: 'A', requiresConfirmation: true },
+        { file: 'b.md', title: 'B' },
+      ],
+      [answer('pae-approve', '批准'), answer('pae-confirm', '跳过该步')],
+    )
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'success', summary: 'B 完成' },
+      2,
+      1,
+    )
+    await vi.waitFor(() => {
+      expect(orchestrator.snapshot().phase).toBe('completed')
+    })
+    const calls = agent.session.replaceCalls
+    expect(calls).toHaveLength(1) // 确认点跳过：step 1 从未锚定，仅 step 2 锚定一次
+    expect((calls[0]!.message.content[0] as { text: string }).text).toContain(
+      '该步被用户跳过，未执行',
+    )
+  })
+
+  it('begin 二次运行（同会话）：整面 replace 遮蔽旧执行历史', async () => {
+    const { orchestrator, agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+    )
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'success', summary: 'A 完成' },
+      1,
+      1,
+    )
+    await vi.waitFor(() => {
+      expect(orchestrator.snapshot().phase).toBe('completed')
+    })
+    await orchestrator.begin('第二个任务')
+    const calls = agent.session.replaceCalls
+    expect(calls).toHaveLength(2) // 首步锚定 + 二次 begin 锚定
+    expect((calls.at(-1)!.message.content[0] as { text: string }).text).toBe('第二个任务')
+    expect(calls.at(-1)!.start).toBeLessThanOrEqual(calls.at(-1)!.end)
+  })
+
+  it('revive：锚点已在 surface → 不重锚；anchorSeqs 缺失 → 重锚', async () => {
+    // A：persisted anchorSeqs 含 step 1 且锚点在 surface（宿主日志重放后的折叠态）
+    const revived = new FakeRevivedSession()
+    const anchorSeq = revived.agent.session.pushUserMessage(fakeUserMessage('锚点'))
+    revived.storage.state = { ...revived.storage.state!, anchorSeqs: { 1: anchorSeq } }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchA = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    const revivePromiseA = orchA.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0)
+    revived.resolveResume(answer('pae-resume', '从断点继续'))
+    await orchestratorTurn(
+      orchA,
+      revived.agent,
+      'completed',
+      { status: 'success', summary: 'A 完成' },
+      1,
+      1,
+    )
+    await orchestratorTurn(
+      orchA,
+      revived.agent,
+      'completed',
+      { status: 'success', summary: 'B 完成' },
+      2,
+      2,
+    )
+    await revivePromiseA
+    const callsA = revived.agent.session.replaceCalls
+    expect(callsA).toHaveLength(1) // 仅 step 2 锚定；step 1 未重锚
+    expect((callsA[0]!.message.content[0] as { text: string }).text).toContain('上一步结果')
+
+    // B：surface 非空但 anchorSeqs 缺失 → step 1 重锚（计划摘要）
+    const revivedB = new FakeRevivedSession()
+    revivedB.agent.session.pushUserMessage(fakeUserMessage('历史'))
+    const orchB = new Orchestrator({
+      agent: revivedB.agent,
+      ask: revivedB.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revivedB.planDir,
+      storage: revivedB.storage,
+    })
+    const revivePromiseB = orchB.revive()
+    await vi.waitFor(() => revivedB.receivedQuestions.length > 0)
+    revivedB.resolveResume(answer('pae-resume', '从断点继续'))
+    await orchestratorTurn(
+      orchB,
+      revivedB.agent,
+      'completed',
+      { status: 'success', summary: 'A 完成' },
+      1,
+      1,
+    )
+    await orchestratorTurn(
+      orchB,
+      revivedB.agent,
+      'completed',
+      { status: 'success', summary: 'B 完成' },
+      2,
+      2,
+    )
+    await revivePromiseB
+    const callsB = revivedB.agent.session.replaceCalls
+    expect(callsB).toHaveLength(2) // step1 + step2 各锚定一次
+    expect((callsB[0]!.message.content[0] as { text: string }).text).toContain('计划摘要')
   })
 })

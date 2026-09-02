@@ -1,6 +1,6 @@
 {
   "name": "dsh-plan-and-execute",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "dsh plugin: plan-and-execute orchestration over ReactLoopAgent",
   "type": "module",
   "license": "MIT",

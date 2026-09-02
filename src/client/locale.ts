@@ -16,7 +16,7 @@ export const zh = {
   approve: '批准',
   keep: '继续修改',
   feedback: '驳回反馈',
-  feedbackHint: '选「继续修改」时附上反馈，可选',
+  feedbackHint: '选「继续修改」时附上反馈，可选；新增的独立任务会成为新步骤',
   discuss: '讨论',
 }
 
@@ -28,7 +28,7 @@ export const en: Record<PaeCardKey, string> = {
   approve: 'Approve',
   keep: 'Revise',
   feedback: 'Rejection feedback',
-  feedbackHint: 'Feedback when declining, optional',
+  feedbackHint: 'Feedback when declining, optional; new independent tasks become new steps',
   discuss: 'Discuss',
 }
 

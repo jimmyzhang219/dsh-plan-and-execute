@@ -36,25 +36,82 @@ describe('submit_plan 工具', () => {
 
 describe('report_step 工具', () => {
   it('正常汇报 → 编排器收到当前步汇报并返回确认', async () => {
-    const calls: Array<[string, string]> = []
+    const calls: Array<{
+      status: string
+      artifacts: string[]
+      summary: string
+      exitCode?: number
+    }> = []
     const tool = createReportStepTool(
       () =>
         ({
-          reportStepForCurrent: (outcome: string, summary: string) => {
-            calls.push([outcome, summary])
+          reportStepForCurrent: (
+            status: string,
+            artifacts: string[],
+            summary: string,
+            exitCode?: number,
+          ) => {
+            calls.push({ status, artifacts, summary, exitCode })
           },
         }) as never,
     )
-    await expect(run(tool, { outcome: 'done', summary: '完成' })).resolves.toEqual({
-      received: true,
-    })
-    expect(calls).toEqual([['done', '完成']])
+    await expect(
+      run(tool, { status: 'success', artifacts: ['a.md'], summary: '完成', exit_code: 0 }),
+    ).resolves.toEqual({ received: true })
+    expect(calls).toEqual([
+      { status: 'success', artifacts: ['a.md'], summary: '完成', exitCode: 0 },
+    ])
   })
-  it('outcome 非法 → 抛错', async () => {
+  it('status 非法 → 抛错', async () => {
     const tool = createReportStepTool(() => ({}) as never)
-    await expect(run(tool, { outcome: 'oops', summary: 'x' })).rejects.toThrow(
-      "outcome 必须是 'done' 或 'blocked'",
+    await expect(run(tool, { status: 'oops', artifacts: [], summary: 'x' })).rejects.toThrow(
+      "status 必须是 'success' 或 'failed'",
     )
+  })
+  it('summary 超长 → 不抛错（长度仅软约束）', async () => {
+    const calls: Array<{
+      status: string
+      artifacts: string[]
+      summary: string
+      exitCode?: number
+    }> = []
+    const tool = createReportStepTool(
+      () =>
+        ({
+          reportStepForCurrent: (
+            status: string,
+            artifacts: string[],
+            summary: string,
+            exitCode?: number,
+          ) => {
+            calls.push({ status, artifacts, summary, exitCode })
+          },
+        }) as never,
+    )
+    await expect(
+      run(tool, { status: 'success', artifacts: [], summary: '超'.repeat(200), exit_code: 0 }),
+    ).resolves.toEqual({ received: true })
+    expect(calls).toEqual([
+      { status: 'success', artifacts: [], summary: '超'.repeat(200), exitCode: 0 },
+    ])
+  })
+  it('exit_code 与 status 矛盾 → 抛错', async () => {
+    const tool = createReportStepTool(() => ({}) as never)
+    await expect(
+      run(tool, { status: 'success', artifacts: [], summary: 'x', exit_code: 1 }),
+    ).rejects.toThrow('status=success 时 exit_code 必须为 0')
+    await expect(
+      run(tool, { status: 'failed', artifacts: [], summary: 'x', exit_code: 0 }),
+    ).rejects.toThrow('status=failed 时 exit_code 不能为 0')
+  })
+  it('artifacts 超限（>20 项 / 超长项）→ 抛错', async () => {
+    const tool = createReportStepTool(() => ({}) as never)
+    await expect(
+      run(tool, { status: 'success', artifacts: Array(21).fill('f'), summary: 'x' }),
+    ).rejects.toThrow('artifacts 必须是数组且不超过 20 项')
+    await expect(
+      run(tool, { status: 'success', artifacts: ['超'.repeat(121)], summary: 'x' }),
+    ).rejects.toThrow('artifacts 每项必须是非空字符串且不超过 120 字')
   })
 })
 
@@ -64,7 +121,7 @@ describe('reportStepForCurrent', () => {
       [{ file: 'a.md', title: 'A' }],
       [answer('pae-approve', '批准')],
     )
-    await expect(orchestrator.reportStepForCurrent('done', '太早')).rejects.toThrow(
+    await expect(orchestrator.reportStepForCurrent('success', [], '太早')).rejects.toThrow(
       'report_step 仅在执行阶段的当前步骤内可用',
     )
   })

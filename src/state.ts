@@ -55,14 +55,21 @@ export interface PaeStepModel {
   readonly model: string
 }
 
+/** report_step 的单步结局：success=已完成；failed=受阻/失败（blocked 语义并入）。 */
+export type StepReportStatus = 'success' | 'failed'
+
 /** report_step 的单步汇报载荷（内存态；不写会话日志）。 */
 export interface PaeStepReportPayload {
   /** 汇报的步骤号（1-based）。 */
   readonly stepIndex: number
-  /** 结局：done=已完成本步；blocked=无法完成。 */
-  readonly outcome: 'done' | 'blocked'
-  /** 一两句结果/原因说明。 */
+  /** 结局：success=已完成本步；failed=无法完成/受阻。 */
+  readonly status: StepReportStatus
+  /** 本步产出/涉及的文件路径（相对会话 cwd；可为空数组）。 */
+  readonly artifacts: readonly string[]
+  /** 结果抽象描述（尽量不超过 200 字，不含原文复现）。 */
   readonly summary: string
+  /** 最后命令退出码（0=成功；受阻等无命令场景可省略）。 */
+  readonly exit_code?: number
 }
 
 /** 构造 `todo/write` 整表快照；statuses 缺省为 pending（1-based）。 */

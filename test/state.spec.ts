@@ -56,15 +56,54 @@ describe('stepModels 持久化往返', () => {
       stepReports: new Map<number, PaeStepReportPayload>(),
       statuses: new Map<number, TodoItem['status']>(),
       skipped: new Set<number>(),
+      anchorSeqs: new Map<number, number>(),
     }
     const empty = snapshotState({ ...base, stepModels: new Map() })
     expect('stepModels' in empty).toBe(false)
+    expect('anchorSeqs' in empty).toBe(false)
     const filled = snapshotState({
       ...base,
       stepModels: new Map([[1, { provider: 'a', model: 'm' }]]),
+      anchorSeqs: new Map([[1, 7]]),
     })
     expect(filled.stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
+    expect(filled.anchorSeqs).toEqual({ 1: 7 })
     const restored = restoreState(filled)
     expect(restored.stepModels).toEqual(new Map([[1, { provider: 'a', model: 'm' }]]))
+    expect(restored.anchorSeqs).toEqual(new Map([[1, 7]]))
+  })
+})
+
+describe('旧版 outcome → status 迁移', () => {
+  it('restoreState 把旧 { outcome, summary } 汇报映射为新协议；新协议条目原样通过', () => {
+    const restored = restoreState({
+      phase: 'executing',
+      stepReports: [
+        { stepIndex: 1, outcome: 'done', summary: '完成' } as unknown as PaeStepReportPayload,
+        { stepIndex: 2, outcome: 'blocked', summary: '卡住' } as unknown as PaeStepReportPayload,
+        { stepIndex: 3, status: 'failed', artifacts: ['a.md'], summary: '受阻', exit_code: 1 },
+      ],
+      statuses: {},
+      skipped: [],
+    })
+    expect(restored.stepReports.get(1)).toEqual({
+      stepIndex: 1,
+      status: 'success',
+      artifacts: [],
+      summary: '完成',
+    })
+    expect(restored.stepReports.get(2)).toEqual({
+      stepIndex: 2,
+      status: 'failed',
+      artifacts: [],
+      summary: '卡住',
+    })
+    expect(restored.stepReports.get(3)).toEqual({
+      stepIndex: 3,
+      status: 'failed',
+      artifacts: ['a.md'],
+      summary: '受阻',
+      exit_code: 1,
+    })
   })
 })

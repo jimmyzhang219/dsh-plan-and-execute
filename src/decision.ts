@@ -20,7 +20,7 @@ export function classifyOutcome(
   if (turnEndKind === 'error' || turnEndKind === 'max-tokens' || turnEndKind === 'interrupted') {
     return 'failed'
   }
-  if (freshReport !== undefined) return freshReport.outcome === 'done' ? 'done' : 'blocked'
+  if (freshReport !== undefined) return freshReport.status === 'success' ? 'done' : 'blocked'
   return 'missing-report'
 }
 
