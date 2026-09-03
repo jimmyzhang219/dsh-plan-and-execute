@@ -24,12 +24,12 @@ npx @deepseek-ai/dsh web
 
 ## 使用方式
 
-在 Web UI 对话框里输入 `/plan-and-execute 提示词...`  
+在 Web UI 对话框里输入 `/plan-and-execute 提示词...`
 
 ## 使用示例一
 
 ```sh
-/plan-and-execute 
+/plan-and-execute
 根据以下要求帮我生成 **2026年国庆假期（10月1日–10月7日）** 北京一地 **7天6晚** 的详细出游计划。
 
 ## 基础参数
@@ -64,7 +64,7 @@ npx @deepseek-ai/dsh web
 ## 使用示例二
 
 ```sh
-/plan-and-execute 
+/plan-and-execute
 - 按以下规格实现一个B/S文档阅读工具。
 
 ### 需求
@@ -99,14 +99,11 @@ pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝�
 
 ## 配置（cordis.yml `config`）
 
-| 键                  | 默认      | 说明                                  |
-| ------------------- | --------- | ------------------------------------- |
-| `onStepFailure`     | `'pause'` | 步骤失败：暂停问人 / 自愈重试         |
-| `maxAutoRecoveries` | `2`       | 自愈次数上限（仅 auto-recover）       |
-| `planDir`           | `'.pae'`  | 计划根目录（相对 dsh home 数据目录）  |
-
-> 编排产物（步骤文件、`orchestrator.json`）固定写到 `<DSH_HOME>/<planDir>/<sessionId>/`。
-> `DSH_HOME` 由 dsh 运行时动态解析（`$DSH_HOME` 环境变量，未设置时默认 `~/.dsh`），与各会话所属工作目录无关。
+| 键                  | 默认      | 说明                            |
+| ------------------- | --------- | ------------------------------- |
+| `onStepFailure`     | `'pause'` | 步骤失败：暂停问人 / 自愈重试   |
+| `maxAutoRecoveries` | `2`       | 自愈次数上限（仅 auto-recover） |
+| `planDir`           | `'.pae'`  | 计划根目录（相对会话 cwd）      |
 
 ## 手工验收清单（`pnpm dev` + Web UI）
 

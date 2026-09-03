@@ -37,8 +37,6 @@ function fakeCtx() {
   /** settings 假服务：register 逐用例可改写（抛错模拟重复注册降级路径）。 */
   const settings = { register: vi.fn(() => {}) }
   const ctx = {
-    /** host dshHomePath 服务替身：把 DSH_HOME 解析到本次临时会话目录（等价于设 $DSH_HOME=cwd）。 */
-    dshHomePath: (...segments: string[]) => join(cwd, ...segments),
     registered,
     listeners,
     sessionTitle,

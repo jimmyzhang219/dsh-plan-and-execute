@@ -7,7 +7,7 @@
 
 /** 卡片载荷（submit_plan 参数；审批卡经 parsePlanDetail 构造）。 */
 export interface CardArgs {
-  /** 计划目录（绝对路径；打开路径的数据来源）。 */
+  /** 计划目录（相对会话 cwd；打开路径的数据来源）。 */
   readonly planDir: string
   /** 计划一句话概述（可缺省）。 */
   readonly summary?: string

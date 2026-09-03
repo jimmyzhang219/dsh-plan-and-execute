@@ -39,7 +39,7 @@ export interface PlanStep {
 
 /** submit_plan 提交的计划载荷（批准后即执行清单）。 */
 export interface PaePlanPayload {
-  /** 计划目录：步骤 Markdown 文件所在目录（绝对路径，位于 dsh home 数据目录下）。 */
+  /** 计划目录：步骤 Markdown 文件所在（相对会话 cwd）。 */
   readonly planDir: string
   /** 计划一句话概述（可缺省）。 */
   readonly summary?: string
