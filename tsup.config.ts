@@ -26,7 +26,11 @@ export default defineConfig([
     // 运行时由 dsh 进程提供唯一实例（不要把它们打进来）。
   },
   {
-    entry: ['src/client/index.ts'],
+    // 产出文件名必须是 client.js：dsh 宿主固定以 /plugins/<id>/client.js(.map) 路由 serve
+    // 原始字节（rc.2 不重写 bundle 尾部 sourceMappingURL），文件名若为 index.cjs，
+    // 浏览器会按脚本 URL 基名解析出 /plugins/<id>/index.cjs.map → 404。
+    // 对象形式 entry 控制 chunk 名 + outExtension 强制 .js（type:module 下 cjs 默认 .cjs）。
+    entry: { client: 'src/client/index.ts' },
     format: ['cjs'],
     target: 'es2024',
     platform: 'browser',
@@ -35,6 +39,7 @@ export default defineConfig([
     sourcemap: true,
     clean: false,
     external: CLIENT_EXTERNALS,
+    outExtension: () => ({ js: '.js' }),
     // dsh client 模块系统契约：包自身调用 window.__ModuleLoader__.load({id, factory})
     // 注册（宿主只 serve 原始字节，不注入包装；对齐 dsh 官方 tsdown.client.ts banner）。
     // factory 的 require 参数解析 externals（loader 模块表），返回 module.exports 完成 materialize。

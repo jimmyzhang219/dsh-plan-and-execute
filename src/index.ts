@@ -4,10 +4,14 @@
  * 正式安装：`dsh plugin --profile <name> add <本工程目录>`（读 dsh.bundle.patch）。
  * @module dsh-plan-and-execute
  */
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+// rc.2 宿主将事件 seq 品牌化为 SessionSeq：replace surfaceOp 的区间与来源 seq 需经构造器承认。
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 // Type-only：激活各宿主包的 Context 合并（ctx.commands/tools/systemPrompt/sessionTitle/事件类型）。
 import type {} from '@deepseek-ai/dsh-commands'
@@ -37,7 +41,7 @@ export interface Config {
   onStepFailure: 'pause' | 'auto-recover'
   /** auto-recover 模式下单步自愈次数上限。 */
   maxAutoRecoveries: number
-  /** 计划根目录（相对会话 cwd）；实际目录 = <planDir>/<sessionId>。 */
+  /** 计划根目录（相对 dsh home 数据目录）；实际目录 = <dshHome>/<planDir>/<sessionId>。 */
   planDir: string
 }
 
@@ -47,14 +51,49 @@ export const Config: Schema<Config> = Schema.object({
     .description('步骤失败策略')
     .default('pause'),
   maxAutoRecoveries: Schema.number().description('单步自愈次数上限（仅 auto-recover）').default(2),
-  planDir: Schema.string().description('计划文件根目录（相对会话 cwd）').default('.pae'),
+  planDir: Schema.string().description('计划文件根目录（相对 dsh home 数据目录）').default('.pae'),
 })
+
+/** dsh 默认数据根目录名（与 host @deepseek-ai/dsh-home-paths 的 DSH_HOME_DIR_NAME 一致）。 */
+const DSH_HOME_DIR_NAME = '.dsh'
+/** 覆盖 dsh 数据根目录的环境变量（与 host @deepseek-ai/dsh-home-paths 的 DSH_HOME_ENV 一致）。 */
+const DSH_HOME_ENV = 'DSH_HOME'
+
+/** ctx 上 host 注册的 dshHomePath 服务签名（@deepseek-ai/dsh-app-boot boot() 提供；本工程不引入其类型，故本地收窄）。 */
+type DshHomePathService = (...segments: string[]) => string
+
+/**
+ * 取 dsh 数据根目录（DSH_HOME）。
+ * 优先调用 host 在 ctx 上注册的 dshHomePath 服务（动态解析：`$DSH_HOME` 环境变量非空
+ * 即用，否则回落 `~/.dsh`）；服务不可见（宿主未走 app-boot）时按同一优先级用标准库
+ * 推导。两种路径都不写死固定路径，运行时随环境变化。
+ * @param ctx - dsh 上下文（app-boot 会在其上 provide dshHomePath 服务）。
+ * @returns 归一化的 DSH_HOME 绝对路径。
+ */
+function resolveDshHome(ctx: Context): string {
+  // ctx 是 cordis 代理：读已注册服务会沿 fiber 祖先链解析（子 ctx 也能读到根 ctx 提供的
+  // 服务）；未注册且当前 fiber 活跃时会抛 “cannot get property without inject”，据此
+  // try/catch 判定服务是否存在，不存在再回退到环境推导。
+  try {
+    const host = (ctx as Context & { dshHomePath?: DshHomePathService }).dshHomePath
+    if (host !== undefined) return host()
+  } catch {
+    // host 未提供 dshHomePath 服务（宿主未走 app-boot）：继续按同一优先级自行推导
+  }
+  const fromEnv = process.env[DSH_HOME_ENV]
+  const home =
+    fromEnv !== undefined && fromEnv.trim().length > 0
+      ? fromEnv
+      : join(homedir(), DSH_HOME_DIR_NAME)
+  return resolve(home)
+}
 
 /** 真 Agent → 窄结构接口的唯一适配点（todo/write 与 surface replace 均为宿主公开 API）。 */
 function toDriveAgent(agent: Agent): DriveAgent {
   const session = agent.session
   const drive: DriveSession = {
-    events: session.events,
+    // rc.2 宿主移除 Session.events 直接属性 → 快照 API（无参返回全量日志只读快照）。
+    events: session.snapshotEvents(),
     surface: session.surface,
     writeTodos: (todos) => {
       session.append('todo/write', { todos: [...todos] })
@@ -63,8 +102,9 @@ function toDriveAgent(agent: Agent): DriveAgent {
     // （仅裁剪模型投影 deriveMessages；事件日志与 UI 轨迹保留，restore 时重放）。
     replaceSurface: (message, start, end, sourceEventSeqs) => {
       const event = session.append('user/message', message, {
-        surfaceOp: { op: 'replace', start, end },
-        sourceEventSeqs,
+        // rc.2 类型品牌化：surfaceOp 区间与 sourceEventSeqs 需 SessionSeq 承认（运行时为校验+同值返回）。
+        surfaceOp: { op: 'replace', start: SessionSeq(start), end: SessionSeq(end) },
+        sourceEventSeqs: sourceEventSeqs.map((seq) => SessionSeq(seq)),
       })
       return event.seq
     },
@@ -83,16 +123,15 @@ function toDriveAgent(agent: Agent): DriveAgent {
  */
 export function apply(ctx: Context, config: Config): void {
   console.log('[dsh-plan-and-execute] plugin loaded')
+  /** dsh 数据根目录（DSH_HOME；启动时经 host 服务动态解析一次）。 */
+  const dshHome = resolveDshHome(ctx)
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
   /** sessionId → 编排器（settings/updated 桥接按载荷中的 sessionId 定位）。 */
   const bySessionId = new Map<string, Orchestrator>()
 
-  /** 会话计划目录：<会话 cwd>/<planDir>/<sessionId>。 */
-  const planDirOf = (agent: Agent): string => {
-    const cwd = agent.session.header.cwd ?? process.cwd()
-    return `${cwd}/${config.planDir}/${String(agent.id)}`
-  }
+  /** 会话计划目录：<dsh home>/<planDir>/<sessionId>（与各会话所属工作目录解耦，固定落 DSH_HOME）。 */
+  const planDirOf = (agent: Agent): string => join(dshHome, config.planDir, String(agent.id))
 
   /** 用户交互通道包装（部署无 userQuestions 时抛错）。 */
   const askFor = (agent: Agent) => (questions: AskUserQuestionItem[]) => {
@@ -222,7 +261,7 @@ export function apply(ctx: Context, config: Config): void {
         if (agent.status !== 'idle') {
           return { kind: 'error', text: `agent 正忙（${agent.status}），请等当前回合结束后再启动` }
         }
-        if (isPlanModeActive(agent.session.events)) {
+        if (isPlanModeActive(agent.session.snapshotEvents())) {
           return { kind: 'error', text: 'plan-mode 处于激活状态，请先 /plan off（两者互斥）' }
         }
         const loaded = await fileStorage(planDirOf(agent)).load()

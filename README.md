@@ -19,6 +19,7 @@ DeepSeek Harness (dsh) 的 Plan-and-Execute 编排插件
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
+npx @deepseek-ai/dsh web
 ```
 
 ## 使用方式
@@ -98,11 +99,14 @@ pnpm dev              # 在 dsh checkout 启动 Web UI 并加载本插件（绝�
 
 ## 配置（cordis.yml `config`）
 
-| 键                  | 默认      | 说明                            |
-| ------------------- | --------- | ------------------------------- |
-| `onStepFailure`     | `'pause'` | 步骤失败：暂停问人 / 自愈重试   |
-| `maxAutoRecoveries` | `2`       | 自愈次数上限（仅 auto-recover） |
-| `planDir`           | `'.pae'`  | 计划根目录（相对会话 cwd）      |
+| 键                  | 默认      | 说明                                  |
+| ------------------- | --------- | ------------------------------------- |
+| `onStepFailure`     | `'pause'` | 步骤失败：暂停问人 / 自愈重试         |
+| `maxAutoRecoveries` | `2`       | 自愈次数上限（仅 auto-recover）       |
+| `planDir`           | `'.pae'`  | 计划根目录（相对 dsh home 数据目录）  |
+
+> 编排产物（步骤文件、`orchestrator.json`）固定写到 `<DSH_HOME>/<planDir>/<sessionId>/`。
+> `DSH_HOME` 由 dsh 运行时动态解析（`$DSH_HOME` 环境变量，未设置时默认 `~/.dsh`），与各会话所属工作目录无关。
 
 ## 手工验收清单（`pnpm dev` + Web UI）
 

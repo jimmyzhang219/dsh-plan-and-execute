@@ -91,7 +91,7 @@ type AskFn = (questions: AskUserQuestionItem[]) => Promise<AskUserQuestionAnswer
 
 /** 解析后的编排配置：失败策略 + 计划根目录。 */
 interface ResolvedConfig extends FailurePolicy {
-  /** 相对会话 cwd 的计划根目录（配置值）。 */
+  /** 相对 dsh home 数据目录的计划根目录（配置值）。 */
   readonly planRoot: string
 }
 
