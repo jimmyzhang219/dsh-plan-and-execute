@@ -48,6 +48,54 @@ const CSS = `
   background: var(--dsw-alias-state-warn-primary, #ffd166);
 }
 .pae-header-actions { margin-left: auto; display: flex; gap: 8px; }
+.pae-schedule {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pae-schedule-clear {
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.pae-schedule-clear:hover { color: var(--dsw-alias-state-error-primary, #e5484d); }
+.pae-schedule-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--dsw-specific-input-major, #2a2a2e);
+  border: 1px solid var(--dsw-alias-border-l1, currentColor);
+  border-radius: 10px;
+  box-shadow: var(--dsw-shadow-lv2, none);
+}
+.pae-schedule-picker label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, inherit);
+}
+.pae-schedule-picker input {
+  background: var(--dsw-alias-bg-base, transparent);
+  color: var(--dsw-alias-label-primary, inherit);
+  border: 1px solid var(--dsw-alias-border-l1, currentColor);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 18px;
+}
 .pae-body {
   flex: 1 1 auto;
   min-height: 0;

@@ -6,7 +6,8 @@ import {
   PaeReviewCardView,
   type PaeReviewCardProps,
 } from '../../src/client/PaeReviewCard.tsx'
-import { PAE_MODELS_NS } from '../../src/state.ts'
+import { PAE_MODELS_NS, PAE_SCHEDULE_NS } from '../../src/state.ts'
+import { zh } from '../../src/client/locale.ts'
 
 // vitest 未开 globals：显式 cleanup 避免跨用例 DOM 累积（与 plan-card-render.spec.tsx 一致）。
 afterEach(cleanup)
@@ -128,6 +129,90 @@ describe('PaeReviewCard', () => {
       target: { value: 'deepseek-official|deepseek-v4-pro' },
     })
     await waitFor(() => expect(screen.getByText(/应用失败|denied/)).toBeTruthy())
+  })
+})
+
+describe('执行时间控件', () => {
+  // base.t 是恒等函数（既有用例按键名断言）；本组用例断言真实中文文案（简报样本逐字），
+  // 因此注入混合 t：date/time 输入按键名 scheduleDate/scheduleTime 作稳定标签定位
+  // （getByLabelText 键名查询，同组件 model-N aria-label 约定），其余键取 locale zh 文案。
+  const zhT = (key: string): string =>
+    key === 'scheduleDate' || key === 'scheduleTime'
+      ? key
+      : ((zh as Record<string, string>)[key] ?? key)
+  // 回显走顶层 scheduledAt prop（简报组件契约：View 把 args.scheduledAt 透传为 prop；
+  // parsePlanDetail 的 CardArgs.scheduledAt 属协议层，不经 args 直接驱动卡片状态）。
+  const scheduledArgs = (at?: number) => ({
+    ...base,
+    t: zhT,
+    ...(at === undefined ? {} : { scheduledAt: at }),
+  })
+  it('默认（无排期）显示「立即执行」chip；打开浮层选完整时间 → settings.update(PAE_SCHEDULE_NS, {at})', async () => {
+    const update = vi.fn(async () => undefined)
+    const { rerender } = render(<PaeReviewCard {...scheduledArgs()} settings={{ update }} />)
+    expect(screen.getByRole('button', { name: /立即执行/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /立即执行/ }))
+    const dateInput = screen.getByLabelText('scheduleDate') as HTMLInputElement
+    const timeInput = screen.getByLabelText('scheduleTime') as HTMLInputElement
+    const when = new Date(Date.now() + 86_400_000) // 明天同时刻
+    fireEvent.change(dateInput, {
+      target: {
+        value: `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}-${String(when.getDate()).padStart(2, '0')}`,
+      },
+    })
+    fireEvent.change(timeInput, {
+      target: {
+        value: `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`,
+      },
+    })
+    await waitFor(() => {
+      expect(update).toHaveBeenCalledWith(
+        PAE_SCHEDULE_NS,
+        expect.objectContaining({ 'sess-1': { at: expect.any(Number) } }),
+        undefined,
+      )
+    })
+    rerender(<PaeReviewCard {...scheduledArgs()} settings={{ update }} />)
+    expect(screen.getByText(/计划于/)).toBeTruthy()
+  })
+
+  it('回显卡：scheduledAt 存在 → 默认显示计划时间 chip（不显示立即执行）', () => {
+    const at = new Date(2026, 8, 6, 10, 0).getTime()
+    render(<PaeReviewCard {...scheduledArgs(at)} />)
+    expect(screen.getByText(/计划于 2026-09-06 10:00 执行/)).toBeTruthy()
+  })
+
+  it('点「立即执行」清除 → settings.update(PAE_SCHEDULE_NS, {at: null})', async () => {
+    const update = vi.fn(async () => undefined)
+    const at = Date.now() + 86_400_000
+    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+    // 排期态 chip 旁的 ×（aria-label=立即执行）与浮层内「立即执行」按钮同语义（clearSchedule）
+    fireEvent.click(screen.getByRole('button', { name: /立即执行/ }))
+    await waitFor(() => {
+      expect(update).toHaveBeenCalledWith(PAE_SCHEDULE_NS, { 'sess-1': { at: null } }, undefined)
+    })
+  })
+
+  it('已过去的时间（完整输入但 < now）→ 行内错误提示且不发送 settings', async () => {
+    const update = vi.fn(async () => undefined)
+    render(<PaeReviewCard {...scheduledArgs()} settings={{ update }} />)
+    fireEvent.click(screen.getByRole('button', { name: /立即执行/ }))
+    const past = new Date(Date.now() - 60_000)
+    fireEvent.change(screen.getByLabelText('scheduleDate') as HTMLInputElement, {
+      target: {
+        value: `${past.getFullYear()}-${String(past.getMonth() + 1).padStart(2, '0')}-${String(past.getDate()).padStart(2, '0')}`,
+      },
+    })
+    fireEvent.change(screen.getByLabelText('scheduleTime') as HTMLInputElement, {
+      target: {
+        value: `${String(past.getHours()).padStart(2, '0')}:${String(past.getMinutes()).padStart(2, '0')}`,
+      },
+    })
+    // 本仓库未装配 jest-dom（无 setup 文件），沿用既有断言风格检查 status 内容
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toMatch(/晚于当前/)
+    })
+    expect(update).not.toHaveBeenCalled()
   })
 })
 

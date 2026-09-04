@@ -17,8 +17,9 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import { flattenCatalog, optionKey } from './plan-card.ts'
-import { PAE_MODELS_NS } from '../state.ts'
+import { PAE_MODELS_NS, PAE_SCHEDULE_NS } from '../state.ts'
 import {
+  buildSchedulePatch,
   buildSettingsPatch,
   isPlanReviewPending,
   parsePlanDetail,
@@ -43,6 +44,31 @@ interface AnswerLike {
  */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
+/** epoch ms → 本地 'YYYY-MM-DD HH:mm'（chip 显示；与服务端 formatScheduleAt 同格式）。 */
+function formatLocal(at: number): string {
+  const d = new Date(at)
+  const pad = (v: number): string => String(v).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+/** 'YYYY-MM-DD' + 'HH:mm'（两个原生 input 值）→ epoch ms；缺任一部分返回 undefined。 */
+function composeAt(datePart: string, timePart: string): number | undefined {
+  if (datePart === '' || timePart === '') return undefined
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart)
+  const tm = /^(\d{2}):(\d{2})$/.exec(timePart)
+  if (dm === null || tm === null) return undefined
+  const d = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), Number(tm[1]), Number(tm[2]))
+  return d.getTime()
+}
+/** epoch ms → date/time 两个 input 的 value（本地）。 */
+function splitLocal(at: number): { datePart: string; timePart: string } {
+  const d = new Date(at)
+  const pad = (v: number): string => String(v).padStart(2, '0')
+  return {
+    datePart: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    timePart: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  }
+}
+
 export interface PaeReviewCardProps {
   /** 会话标识（与宿主 agent.id 同源；空串时跳过模型选择静默写）。 */
   readonly sessionId: string
@@ -50,6 +76,8 @@ export interface PaeReviewCardProps {
   readonly pending: PlanReviewPendingLike
   /** 解析出的步骤数据（parsePlanDetail 产物；undefined 时仅渲染决策区）。 */
   readonly args: CardArgs | undefined
+  /** 回显卡回显排期（epoch ms；detail「执行排期」行解析值，无排期行时缺省=立即执行）。 */
+  readonly scheduledAt?: number
   /** 宿主可打开工作区路径（canOpenWorkspacePath；联动步骤标题点击）。 */
   readonly canOpen: boolean
   /** 展平后的模型下拉选项（目录未就绪时为空数组）。 */
@@ -75,6 +103,7 @@ export function PaeReviewCard({
   sessionId,
   pending,
   args,
+  scheduledAt,
   canOpen,
   options,
   current,
@@ -88,6 +117,14 @@ export function PaeReviewCard({
   const [feedback, setFeedback] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [when, setWhen] = useState<number | null>(scheduledAt ?? null) // null=立即
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [datePart, setDatePart] = useState(() =>
+    scheduledAt === undefined ? '' : splitLocal(scheduledAt).datePart,
+  )
+  const [timePart, setTimePart] = useState(() =>
+    scheduledAt === undefined ? '' : splitLocal(scheduledAt).timePart,
+  )
 
   /** 决策提交包装：置 busy、清错误；send 抛错时折叠为卡片内错误文案。 */
   const settle = (send: () => Promise<unknown>): void => {
@@ -134,6 +171,41 @@ export function PaeReviewCard({
       .update(PAE_MODELS_NS, buildSettingsPatch(sessionId, next), undefined)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
   }
+  /** 静默写 settings（无 sessionId 时跳过——同模型下拉的容错）。 */
+  const pushSchedule = (at: number | null): void => {
+    if (sessionId === '') {
+      console.warn('[dsh-plan-and-execute] 审批卡缺少 sessionId，跳过排期保存')
+      return
+    }
+    void settings
+      .update(PAE_SCHEDULE_NS, buildSchedulePatch(sessionId, at), undefined)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
+  }
+  /** 组合日期时间并校验；合法则静默写排期并更新 chip。 */
+  const commitSchedule = (datePart: string, timePart: string): void => {
+    const at = composeAt(datePart, timePart)
+    if (at === undefined) {
+      setError(t('scheduleHint'))
+      return
+    }
+    if (at <= Date.now()) {
+      setError(t('schedulePast'))
+      return
+    }
+    setError(null)
+    setWhen(at)
+    setPickerOpen(false)
+    pushSchedule(at)
+  }
+  /** 清除排期（立即执行）：浮层按钮与 chip 的 × 共用。 */
+  const clearSchedule = (): void => {
+    setWhen(null)
+    setDatePart('')
+    setTimePart('')
+    setPickerOpen(false)
+    setError(null)
+    pushSchedule(null)
+  }
 
   return (
     <div className="pae-frame">
@@ -145,13 +217,72 @@ export function PaeReviewCard({
         <header className="pae-strip">
           <span className="pae-dot" />
           <strong>{t('planReview')}</strong>
-          {canOpen && args !== undefined ? (
-            <span className="pae-header-actions">
+          <span className="pae-header-actions">
+            <span className="pae-schedule">
+              {/* 宿主 ButtonVariant 无 'default'（primary/ghost/outline/toolbar）：
+                  排期态用 toolbar（中性填充 chip），立即态用 outline（简报语义对照） */}
+              <Button
+                size="sm"
+                variant={when === null ? 'outline' : 'toolbar'}
+                onClick={() => setPickerOpen((open) => !open)}
+              >
+                {when === null
+                  ? t('scheduleNow')
+                  : t('scheduleAtHint').replace('%s', formatLocal(when))}
+              </Button>
+              {when !== null ? (
+                <button
+                  type="button"
+                  className="pae-schedule-clear"
+                  aria-label={t('scheduleNow')}
+                  onClick={clearSchedule}
+                >
+                  ×
+                </button>
+              ) : null}
+              {pickerOpen ? (
+                <div className="pae-schedule-picker" data-testid="schedule-picker">
+                  <label>
+                    {t('scheduleDate')}
+                    <input
+                      type="date"
+                      aria-label={t('scheduleDate')}
+                      value={datePart}
+                      onChange={(e) => {
+                        setDatePart(e.target.value)
+                        commitSchedule(e.target.value, timePart)
+                      }}
+                    />
+                  </label>
+                  <label>
+                    {t('scheduleTime')}
+                    <input
+                      type="time"
+                      aria-label={t('scheduleTime')}
+                      value={timePart}
+                      onChange={(e) => {
+                        setTimePart(e.target.value)
+                        commitSchedule(datePart, e.target.value)
+                      }}
+                    />
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    data-testid="schedule-now"
+                    onClick={clearSchedule}
+                  >
+                    {t('scheduleNow')}
+                  </Button>
+                </div>
+              ) : null}
+            </span>
+            {canOpen && args !== undefined ? (
               <Button size="sm" aria-label={t('openDir')} onClick={() => openPath(args.planDir)}>
                 {t('openDir')}
               </Button>
-            </span>
-          ) : null}
+            ) : null}
+          </span>
         </header>
         <div className="pae-body">
           {args?.summary !== undefined ? <p className="pae-summary">{args.summary}</p> : null}
@@ -313,6 +444,7 @@ export function PaeReviewCardView({
       sessionId={sessionId ?? pending.sessionId ?? ''}
       pending={pending}
       args={args}
+      scheduledAt={args?.scheduledAt}
       canOpen={canOpen && connection.isLoopback}
       // 目录未就绪时先渲染决策按钮（选项空）；就绪后下拉出现（提交按钮不依赖目录）
       options={catalog === undefined ? [] : flattenCatalog(catalog)}
