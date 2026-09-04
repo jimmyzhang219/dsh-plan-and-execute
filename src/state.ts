@@ -22,8 +22,11 @@ export const PAE_PLUGIN = 'dsh-plan-and-execute'
  */
 export const PAE_MODELS_NS = 'pae-step-models' as SettingsNamespace
 
-/** 编排阶段：planning（规划）→ executing（执行，可暂停）→ completed/aborted（终态）。 */
-export type PaePhase = 'planning' | 'executing' | 'paused' | 'completed' | 'aborted'
+/** 排期（执行时间）的 settings 命名空间名：审批卡选择「计划执行时间」经此静默写回宿主。 */
+export const PAE_SCHEDULE_NS = 'pae-schedule' as SettingsNamespace
+
+/** 编排阶段：planning（规划）→ scheduled（已批准待定时执行）→ executing（执行，可暂停）→ completed/aborted（终态）。 */
+export type PaePhase = 'planning' | 'scheduled' | 'executing' | 'paused' | 'completed' | 'aborted'
 /** 暂停原因：确认点等待用户 / 步骤失败 / 用户终止。 */
 export type PaePausedReason = 'confirm-point' | 'failure' | 'cancelled'
 

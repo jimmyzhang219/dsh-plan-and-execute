@@ -6,6 +6,8 @@ import {
   buildTodoPayload,
   isPlanModeActive,
   normalizeDir,
+  PAE_PLUGIN,
+  PAE_SCHEDULE_NS,
   type PaeStepReportPayload,
 } from '../src/state.ts'
 
@@ -105,5 +107,38 @@ describe('旧版 outcome → status 迁移', () => {
       summary: '受阻',
       exit_code: 1,
     })
+  })
+})
+
+describe('PAE_SCHEDULE_NS', () => {
+  it('排期 settings 命名空间常量', () => {
+    expect(PAE_SCHEDULE_NS).toBe('pae-schedule')
+    expect(PAE_PLUGIN).toBe('dsh-plan-and-execute')
+  })
+})
+
+describe('persist scheduledAt', () => {
+  it('snapshotState 透出 scheduledAt；restoreState 忽略旧文件（无字段）', () => {
+    const snap = snapshotState({
+      phase: 'scheduled',
+      scheduledAt: 1_750_000_000_000,
+      stepReports: new Map(),
+      statuses: new Map(),
+      stepModels: new Map(),
+      skipped: new Set(),
+      anchorSeqs: new Map(),
+    })
+    expect(snap.phase).toBe('scheduled')
+    expect(snap.scheduledAt).toBe(1_750_000_000_000)
+    // 无 scheduledAt 字段 → 不写键
+    const plain = snapshotState({
+      phase: 'planning',
+      stepReports: new Map(),
+      statuses: new Map(),
+      stepModels: new Map(),
+      skipped: new Set(),
+      anchorSeqs: new Map(),
+    })
+    expect('scheduledAt' in plain).toBe(false)
   })
 })

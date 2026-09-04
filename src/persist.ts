@@ -27,6 +27,8 @@ export interface PersistedOrchestratorState {
   readonly stepIndex?: number
   /** 暂停原因（paused 阶段）。 */
   readonly pausedReason?: PaePausedReason
+  /** 已批准待执行（scheduled 阶段）的执行时刻（epoch ms）。 */
+  readonly scheduledAt?: number
   /** 已批准的计划（executing/paused 阶段）。 */
   readonly plan?: PaePlanPayload
   /** 各步汇报记录（按 stepIndex 去重，数组序）。 */
@@ -94,6 +96,7 @@ export function snapshotState(state: {
   planDir?: string
   stepIndex?: number
   pausedReason?: PaePausedReason
+  scheduledAt?: number
   plan?: PaePlanPayload
   stepReports: ReadonlyMap<number, PaeStepReportPayload>
   statuses: ReadonlyMap<number, TodoItem['status']>
@@ -107,6 +110,7 @@ export function snapshotState(state: {
     ...(state.planDir === undefined ? {} : { planDir: state.planDir }),
     ...(state.stepIndex === undefined ? {} : { stepIndex: state.stepIndex }),
     ...(state.pausedReason === undefined ? {} : { pausedReason: state.pausedReason }),
+    ...(state.scheduledAt === undefined ? {} : { scheduledAt: state.scheduledAt }),
     ...(state.plan === undefined ? {} : { plan: state.plan }),
     stepReports: [...state.stepReports.values()],
     statuses: Object.fromEntries(state.statuses) as Record<number, TodoItem['status']>,
