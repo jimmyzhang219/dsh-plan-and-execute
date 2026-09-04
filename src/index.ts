@@ -8,7 +8,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+// 值导入：当前宿主（dsh-v0.1.2+）把 surface 区间与 sourceEventSeqs 品牌化为
+// SessionSeq（运行时为校验+同值返回的 number），append 边界需经构造器承认。
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 // Type-only：激活各宿主包的 Context 合并（ctx.commands/tools/systemPrompt/sessionTitle/事件类型）。
 import type {} from '@deepseek-ai/dsh-commands'
@@ -51,66 +53,28 @@ export const Config: Schema<Config> = Schema.object({
   planDir: Schema.string().description('计划文件根目录（相对会话 cwd）').default('.pae'),
 })
 
-/**
- * 宿主版本无关的全量日志读取：master 的 Session 以 snapshotEvents() 取代 .events
- * getter（dsh-v0.1.1-rc.2 则相反）。运行期特征探测二选一，避免静态依赖任一版本的独有成员。
- * @param session - 宿主 Session。
- * @returns 全量事件日志的只读快照。
- */
-function readSessionLog(session: unknown): readonly SessionEvent[] {
-  const probe = session as {
-    snapshotEvents?: () => readonly SessionEvent[]
-    events?: readonly SessionEvent[]
-  }
-  if (typeof probe.snapshotEvents === 'function') return probe.snapshotEvents()
-  return probe.events ?? []
-}
-
-/**
- * 宿主版本无关的 replace surfaceOp 追加：master 把 surfaceOp 区间与 sourceEventSeqs
- * 品牌化为 SessionSeq，rc.2 为裸 number——SessionSeq 运行期是“校验+同值返回”的 number，
- * 两者在 append 边界运行时等价。故一律传裸 number，不 import 仅 master 导出的 SessionSeq
- * （值导入会在 rc.2 上以 “does not provide an export named 'SessionSeq'” 使插件装载失败）。
- * @param session - 宿主 Session。
- * @param message - 遮蔽后追加的 user 消息。
- * @param start - 遮蔽区间起点（surface 节点 seq）。
- * @param end - 遮蔽区间终点（surface 节点 seq）。
- * @param sourceEventSeqs - 被遮蔽的完整节点 seq 集合。
- * @returns 新追加事件的 seq。
- */
-function appendSurfaceReplace(
-  session: unknown,
-  message: UserMessage,
-  start: number,
-  end: number,
-  sourceEventSeqs: readonly number[],
-): number {
-  // 必须以方法形式调用宿主 Session.append（保留 this 绑定）：抽出为裸函数调用会
-  // 丢 this，Session.append 内部读 this.log 抛 “Cannot read properties of undefined”。
-  const event = (
-    session as {
-      append(type: 'user/message', data: UserMessage, opts: unknown): { readonly seq: number }
-    }
-  ).append('user/message', message, {
-    surfaceOp: { op: 'replace', start, end },
-    sourceEventSeqs: [...sourceEventSeqs],
-  })
-  return event.seq
-}
-
 /** 真 Agent → 窄结构接口的唯一适配点（todo/write 与 surface replace 均为宿主公开 API）。 */
 function toDriveAgent(agent: Agent): DriveAgent {
   const session = agent.session
   const drive: DriveSession = {
-    events: readSessionLog(session),
+    // 宿主 Session 无 .events 属性，以 snapshotEvents() 提供全量日志只读快照。
+    events: session.snapshotEvents(),
     surface: session.surface,
     writeTodos: (todos) => {
       session.append('todo/write', { todos: [...todos] })
     },
     // 以 replace surfaceOp 追加 user/message，遮蔽 [start..end] surface 节点区间
     // （仅裁剪模型投影 deriveMessages；事件日志与 UI 轨迹保留，restore 时重放）。
-    replaceSurface: (message, start, end, sourceEventSeqs) =>
-      appendSurfaceReplace(session, message, start, end, sourceEventSeqs),
+    // 区间与来源 seq 为宿主品牌类型 SessionSeq，须经构造器承认。
+    replaceSurface: (message, start, end, sourceEventSeqs) => {
+      // 必须以方法形式调用宿主 Session.append（保留 this 绑定）：Session.append
+      // 内部读 this.log，抽出为裸函数调用会丢 this 抛 “Cannot read properties of undefined”。
+      const event = session.append('user/message', message, {
+        surfaceOp: { op: 'replace', start: SessionSeq(start), end: SessionSeq(end) },
+        sourceEventSeqs: [...sourceEventSeqs].map((seq) => SessionSeq(seq)),
+      })
+      return event.seq
+    },
   }
   return {
     session: drive,
@@ -265,7 +229,7 @@ export function apply(ctx: Context, config: Config): void {
         if (agent.status !== 'idle') {
           return { kind: 'error', text: `agent 正忙（${agent.status}），请等当前回合结束后再启动` }
         }
-        if (isPlanModeActive(readSessionLog(agent.session))) {
+        if (isPlanModeActive(agent.session.snapshotEvents())) {
           return { kind: 'error', text: 'plan-mode 处于激活状态，请先 /plan off（两者互斥）' }
         }
         const loaded = await fileStorage(planDirOf(agent)).load()

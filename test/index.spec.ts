@@ -88,30 +88,34 @@ afterAll(async () => {
   if (cwd !== undefined) await rm(cwd, { recursive: true, force: true })
 })
 
-const fakeAgent = (_phase: 'none' | PaePhase) => ({
-  id: 'sess-1',
-  status: 'idle',
-  steer: vi.fn(),
-  whenIdle: async () => {},
-  ctx: {
-    tools: {
-      restrict: vi.fn((_filter: unknown) => () => {}),
-    },
-    on: vi.fn((_event: string, _handler: unknown) => () => {}),
-  },
-  session: {
+const fakeAgent = (_phase: 'none' | PaePhase) => {
+  /** 会话日志底（宿主 Session 为追加型；测试换底以注入 plan/mode 等事件）。 */
+  let events: SessionEvent[] = []
+  return {
     id: 'sess-1',
-    header: { cwd },
-    events: [] as SessionEvent[],
-    surface: { nodes: [], replaceGeneration: 0 },
-    append: vi.fn((_type: string, _data: object) => {}),
-    // rc.2 宿主形状：events 直接属性改为 snapshotEvents() 快照 API；回读本对象 events
-    // 数组以便用例直接替换注入（如 plan/mode 事件模拟）。
-    snapshotEvents() {
-      return this.events
+    status: 'idle',
+    steer: vi.fn(),
+    whenIdle: async () => {},
+    ctx: {
+      tools: {
+        restrict: vi.fn((_filter: unknown) => () => {}),
+      },
+      on: vi.fn((_event: string, _handler: unknown) => () => {}),
     },
-  },
-})
+    session: {
+      id: 'sess-1',
+      header: { cwd },
+      surface: { nodes: [], replaceGeneration: 0 },
+      append: vi.fn((_type: string, _data: object) => {}),
+      // 当前宿主 Session 形状：无 .events 属性，snapshotEvents() 返回全量日志只读快照
+      snapshotEvents: () => [...events],
+      // 测试专用：整体替换事件日志（宿主 Session 无此方法）
+      seedEvents: (next: readonly SessionEvent[]) => {
+        events = [...next]
+      },
+    },
+  }
+}
 
 /** 写入 orchestrator.json 模拟既有编排状态（命令校验读文件）。 */
 async function seedState(
@@ -193,9 +197,9 @@ describe('apply 装配', () => {
     })
 
     const planMode = fakeAgent('none')
-    planMode.session.events = [
+    planMode.session.seedEvents([
       { seq: 1, type: 'plan/mode', data: { active: true } } as SessionEvent,
-    ]
+    ])
     await expect(handler({ agent: planMode, rawInput: '做点事' })).resolves.toMatchObject({
       kind: 'error',
     })

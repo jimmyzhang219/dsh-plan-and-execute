@@ -26,9 +26,9 @@ export default defineConfig([
     // 运行时由 dsh 进程提供唯一实例（不要把它们打进来）。
   },
   {
-    // 产出文件名必须是 client.js：dsh 宿主固定以 /plugins/<id>/client.js(.map) 路由 serve
-    // 原始字节（rc.2 不重写 bundle 尾部 sourceMappingURL），文件名若为 index.cjs，
-    // 浏览器会按脚本 URL 基名解析出 /plugins/<id>/index.cjs.map → 404。
+    // 产出文件名必须是 client.js：dsh 宿主固定以 /plugins/<id>/client.js(.map) 路由
+    // serve 原始字节，文件名若为 index.cjs，浏览器会按脚本 URL 基名解析出
+    // /plugins/<id>/index.cjs.map → 404。
     // 对象形式 entry 控制 chunk 名 + outExtension 强制 .js（type:module 下 cjs 默认 .cjs）。
     entry: { client: 'src/client/index.ts' },
     format: ['cjs'],

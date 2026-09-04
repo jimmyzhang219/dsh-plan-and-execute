@@ -20,44 +20,37 @@ import { PaeReviewCardView, type PaeReviewCardInjected } from './PaeReviewCard.t
 
 /** 插件名（与宿主 half 同名，供模块表路由）。 */
 export const name = 'dsh-plan-and-execute'
-/**
- * 必需服务注入：槽位注册表、文案字典、远程基面与连接面。
- * 注意 remote.session/remote.settings 不在其中——它们仅 alpha.1+ 提供，rc.2 缺失，
- * 列入 inject 会让 entry 永久 pending、web 启动失败（assertEntriesActive 抛错）。
- * 二者的取用延迟到 slot 渲染期（见 apply 的 rc.2 兼容说明）。
- */
-export const inject = ['slots', 'locale', 'remote', 'connection']
+/** 必需服务注入：槽位注册表、文案字典、远程会话/设置面与连接面。 */
+export const inject = [
+  'slots',
+  'locale',
+  'remote',
+  'remote.session',
+  'remote.settings',
+  'connection',
+]
 
 /** 客户端入口：注册字典与 plan-review 审批卡 composer。 */
 export function apply(ctx: Context): void {
   const connection = ctx.get('connection') as ConnectionHandle
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-plan-and-execute: dictionaries')
-  // rc.2 兼容：remote.session/remote.settings 不能进模块 inject（rc.2 缺失 →
-  // entry 永久 pending、web 启动失败），且 cordis 属性访问（ctx.remote.session）
-  // 要求服务在当前 fiber 的 inject 中声明——两难之下用 ctx.inject 子 fiber 包住
-  // 注册：alpha.x 下等两服务就绪才注册（与 0.3.0 激活时序一致，属性访问合法）；
-  // rc.2 下服务永不就绪、注册永不发生（子 fiber 无 loader entry，不影响 boot 的
-  // entries 激活检查），plan-review 审批由内置 PlanReviewPanel 接管（host 提问
-  // 协议不变）。
-  ctx.inject(['remote.session', 'remote.settings'], (scope) => {
-    // plan-review 审批卡替换：priority -1 先于宿主 question composer 判定，
-    // 结构命中（kind==='plan-review' 且具备 answer/cancel/questions）即接管
-    scope.slots.inject('conversation.composer', () =>
-      scope.slots.register(
-        {
-          name: 'conversation.composer',
-          priority: -1,
-          select: ({ pendingInteraction }: { pendingInteraction: unknown }) =>
-            isPlanReviewPending(pendingInteraction) ? pendingInteraction : null,
-          locale: NS,
-          inject: (): PaeReviewCardInjected => ({
-            sessionRemote: scope.remote.session,
-            settingsRemote: scope.remote.settings,
-            connection,
-          }),
-        },
-        PaeReviewCardView,
-      ),
-    )
-  })
+  // plan-review 审批卡替换：priority -1 先于宿主 question composer 判定，
+  // 结构命中（kind==='plan-review' 且具备 answer/cancel/questions）即接管
+  ctx.slots.inject('conversation.composer', () =>
+    ctx.slots.register(
+      {
+        name: 'conversation.composer',
+        priority: -1,
+        select: ({ pendingInteraction }: { pendingInteraction: unknown }) =>
+          isPlanReviewPending(pendingInteraction) ? pendingInteraction : null,
+        locale: NS,
+        inject: (): PaeReviewCardInjected => ({
+          sessionRemote: ctx.remote.session,
+          settingsRemote: ctx.remote.settings,
+          connection,
+        }),
+      },
+      PaeReviewCardView,
+    ),
+  )
 }

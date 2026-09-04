@@ -49,6 +49,8 @@
         "slots",
         "locale",
         "remote",
+        "remote.session",
+        "remote.settings",
         "connection"
       ]
     }
