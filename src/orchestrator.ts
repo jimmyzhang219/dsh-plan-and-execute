@@ -86,8 +86,22 @@ export interface DriveAgent {
   whenIdle(): Promise<void>
 }
 
-/** 用户交互通道：弹窗询问并返回答案（实现见 index.ts 的 askFor）。 */
-type AskFn = (questions: AskUserQuestionItem[]) => Promise<AskUserQuestionAnswer>
+/** 定时执行注册面（真实实现在 src/schedule.ts + index.ts 组合根；测试注入假件）。 */
+export interface RunScheduler {
+  /** 注册/替换到点执行（同一编排单槽）。 */
+  arm(at: number): void
+  /** 撤销到点执行（取消排期/转为立即执行时）。 */
+  cancel(): void
+}
+
+/**
+ * 用户交互通道：弹窗询问并返回答案（实现见 index.ts 的 askFor）。
+ * options.signal 携带时供宿主导出撤销（到点触发前取消悬空审批卡）。
+ */
+type AskFn = (
+  questions: AskUserQuestionItem[],
+  options?: { signal?: AbortSignal },
+) => Promise<AskUserQuestionAnswer>
 
 /** 解析后的编排配置：失败策略 + 计划根目录。 */
 interface ResolvedConfig extends FailurePolicy {
@@ -135,6 +149,8 @@ interface RuntimeState {
   stepIndex?: number
   /** 暂停原因。 */
   pausedReason?: PaePausedReason
+  /** 已批准待定时执行的时刻（epoch ms；仅 phase='scheduled' 时存在）。 */
+  scheduledAt?: number
   /** 已批准的计划。 */
   plan?: PaePlanPayload
   /** 各步汇报（键为 1-based 步号）。 */
@@ -159,6 +175,13 @@ export class Orchestrator {
   private disposed = false
   /** 当前审批门闩（afterApproval 挂起，等待计划批准后启动执行循环）。 */
   private approval: PromiseWithResolvers<PaePlanPayload> | undefined
+  /**
+   * 当前审批卡的排期意图：number=未来时刻；null=立即执行；undefined=未改动
+   * （仅 scheduled 回显卡语义，保持原排期）。
+   */
+  private pendingSchedule: number | null | undefined = null
+  /** 悬空审批卡的可中断句柄（到点触发前先取消，防止卡片与状态失同步）。 */
+  private currentAskAbort: AbortController | undefined
   /** 最近一次暂停/驳回的反馈 free-text（进入 replan 时回给模型）。 */
   private lastFeedback = ''
   /** report 注入水位线：注入指令时记下，settle 时据此判定"本回合新增的 report"。 */
@@ -184,6 +207,8 @@ export class Orchestrator {
    * @param deps.planDir - 本会话计划目录（已含 sessionId 后缀）。
    * @param deps.storage - 编排状态持久化（planDir/orchestrator.json）。
    * @param deps.hooks - 激活/结束钩子（工具可见性控制）。
+   * @param deps.scheduler - 定时执行注册面（可选中；批准带排期时登记到点执行）。
+   * @param deps.now - 当前时刻提供者（可选中；测试注入固定时钟）。
    */
   constructor(
     private readonly deps: {
@@ -193,6 +218,8 @@ export class Orchestrator {
       planDir: string
       storage: PersistedStorage
       hooks?: OrchestratorHooks
+      scheduler?: RunScheduler
+      now?: () => number
     },
   ) {}
 
@@ -216,6 +243,11 @@ export class Orchestrator {
   /** 状态快照持久化（所有状态变更后调用；fail-loud：写盘失败向上抛）。 */
   private async save(): Promise<void> {
     await this.deps.storage.save(snapshotState(this.state))
+  }
+
+  /** 当前时刻（注入时钟；测试可固定）。 */
+  private now(): number {
+    return this.deps.now === undefined ? Date.now() : this.deps.now()
   }
 
   /** 当前内存态快照（只读；prompt section 等同步读取用）。 */
@@ -270,13 +302,16 @@ export class Orchestrator {
     void this.afterApproval()
   }
 
-  /** 审批等待协程：计划批准 → run(plan, 1)；异常或释放 → 置终止态。 */
+  /** 审批等待协程：计划批准 → run(plan, 1)；scheduled 批准仅登记不启动；异常或释放 → 置终止态。 */
   private async afterApproval(): Promise<void> {
     const gate = this.approval
     if (gate === undefined) return
     try {
       const plan = await gate.promise
-      if (!this.disposed) await this.run(plan, 1)
+      if (this.disposed) return
+      // scheduled 分支：批准时已登记排期，run 由到点触发（fireScheduledRun）驱动
+      if (this.state.phase === 'scheduled') return
+      await this.run(plan, 1)
     } catch (error) {
       if (!this.disposed) {
         this.state.phase = 'aborted'
@@ -311,24 +346,34 @@ export class Orchestrator {
       )
       return { approved: false, error: `计划文件校验失败，请修复后重新提交：\n${lines.join('\n')}` }
     }
-    const answer = await this.askOrDismiss([
-      {
-        id: 'pae-approve',
-        header: 'Plan review',
-        question: `批准此计划（共 ${steps.length} 步）并开始执行？`,
-        detail: planReviewDetail(steps, this.deps.planDir),
-        options: [
-          { label: APPROVE_LABEL, description: '离开规划阶段，开始逐步执行' },
-          { label: KEEP_LABEL, description: '留在规划阶段；你的反馈将回给模型修改后重新提交' },
-        ],
-        intent: { kind: 'plan-review', approve: APPROVE_LABEL },
-      },
-    ])
+    // 撤销可能仍悬空的旧询问句柄，登记新卡句柄（到点触发前由 fireScheduledRun 取消）
+    this.currentAskAbort?.abort()
+    this.currentAskAbort = new AbortController()
+    const answer = await this.askOrDismiss(
+      [
+        {
+          id: 'pae-approve',
+          header: 'Plan review',
+          question: `批准此计划（共 ${steps.length} 步）并开始执行？`,
+          detail: planReviewDetail(steps, this.deps.planDir),
+          options: [
+            { label: APPROVE_LABEL, description: '离开规划阶段，开始逐步执行' },
+            { label: KEEP_LABEL, description: '留在规划阶段；你的反馈将回给模型修改后重新提交' },
+          ],
+          intent: { kind: 'plan-review', approve: APPROVE_LABEL },
+        },
+      ],
+      this.currentAskAbort.signal,
+    )
     if (answer === 'dismissed') {
+      // 卡关闭即失效：清除本次排期意图，下次提交默认立即执行
+      this.pendingSchedule = null
       return { approved: false, error: '用户暂时搁置了审批。留在规划阶段，等待用户下一条消息。' }
     }
     const item = answer.answers.find((entry) => entry.id === 'pae-approve')
     if (item?.selected[0] !== APPROVE_LABEL) {
+      // 卡关闭即失效：驳回后重新提交不再携带本次排期意图
+      this.pendingSchedule = null
       const feedback = item?.custom?.trim()
       const discipline =
         '修订纪律：先用只读工具重新读取（read）要修改的步骤文件确认最新内容，再修改；' +
@@ -347,13 +392,28 @@ export class Orchestrator {
       ...(summary === undefined ? {} : { summary }),
     }
     this.state.plan = plan
-    this.state.phase = 'executing'
-    this.state.stepIndex = 0
     this.state.stepReports.clear()
     this.state.statuses.clear()
     // 不清空 stepModels：批准非新计划（begin/enterReplan 已覆盖），审批前设置须存活到执行期
     this.state.skipped.clear()
     this.state.anchorSeqs.clear()
+    const pendingAt = this.pendingSchedule
+    this.pendingSchedule = undefined
+    if (pendingAt !== null && pendingAt !== undefined && pendingAt > this.now()) {
+      // 定时执行：登记排期与到点执行，executing 由到点触发（fireScheduledRun）驱动
+      this.state.phase = 'scheduled'
+      this.state.stepIndex = undefined
+      this.state.scheduledAt = pendingAt
+      await this.save()
+      this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+      this.deps.scheduler?.arm(pendingAt)
+      this.approval?.resolve(plan)
+      return { approved: true }
+    }
+    // 立即执行（现状路径；排期已滑过亦降级至此）
+    this.state.phase = 'executing'
+    this.state.stepIndex = 0
+    this.state.scheduledAt = undefined
     await this.save()
     this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
     this.approval?.resolve(plan)
@@ -389,6 +449,23 @@ export class Orchestrator {
     }
     this.state.stepModels = new Map(Object.entries(models).map(([k, v]) => [Number(k), v]))
     await this.save()
+    return { ok: true }
+  }
+
+  /**
+   * 记录审批卡当前的执行时间意图（settings/updated 桥接调用）。
+   * number=未来时刻；null=立即执行；仅 planning（首次审批）与 scheduled（回显卡）
+   * 阶段可写——意图只在点击「批准」时消费，卡关闭即失效。
+   * @param atOrNull - 目标执行时刻（epoch ms）；null 表示批准后立即执行。
+   * @returns 失败原因或成功。
+   */
+  async applyPendingSchedule(
+    atOrNull: number | null,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (this.state.phase !== 'planning' && this.state.phase !== 'scheduled') {
+      return { ok: false, error: '当前阶段不可设置执行排期' }
+    }
+    this.pendingSchedule = atOrNull
     return { ok: true }
   }
 
@@ -837,12 +914,16 @@ export class Orchestrator {
     }
   }
 
-  /** ask 包装：任何抛错（含 ASK_CANCELLED）折叠为 'dismissed'。 */
+  /**
+   * ask 包装：任何抛错（含 ASK_CANCELLED）折叠为 'dismissed'。
+   * @param signal - 可选的撤销信号（宿主导出；随 options 透传给弹窗实现）。
+   */
   private async askOrDismiss(
     questions: AskUserQuestionItem[],
+    signal?: AbortSignal,
   ): Promise<AskUserQuestionAnswer | 'dismissed'> {
     try {
-      return await this.deps.ask(questions)
+      return await this.deps.ask(questions, signal === undefined ? undefined : { signal })
     } catch {
       return 'dismissed'
     }

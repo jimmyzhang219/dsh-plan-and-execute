@@ -6,6 +6,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
+import { vi } from 'vitest'
 import type { DriveAgent, DriveSession, DriveSurface, Orchestrator } from '../src/orchestrator.ts'
 import type { PersistedOrchestratorState, PersistedStorage } from '../src/persist.ts'
 
@@ -140,6 +141,19 @@ export class FakeStorage implements PersistedStorage {
   }
 }
 
+/** 假定时执行器（Orchestrator 依赖 RunScheduler 的测试注入件；arm/cancel 调用可断言）。 */
+export interface FakeScheduler {
+  /** 注册/替换到点执行的 mock。 */
+  arm: ReturnType<typeof vi.fn<(at: number) => void>>
+  /** 撤销到点执行的 mock。 */
+  cancel: ReturnType<typeof vi.fn<() => void>>
+}
+
+/** 构造假定时执行器（配合 makeOrchestrator 第 6 参 runtime.scheduler 注入）。 */
+export function fakeScheduler(): FakeScheduler {
+  return { arm: vi.fn<(at: number) => void>(), cancel: vi.fn<() => void>() }
+}
+
 /** 假 ask：脚本化回答队列。 */
 export function fakeAsk(...answers: Array<AskUserQuestionAnswer | Error>): {
   ask: (questions: AskUserQuestionItem[]) => Promise<AskUserQuestionAnswer>
@@ -172,12 +186,14 @@ export async function makeOrchestrator(
   overrides: { onStepFailure?: 'pause' | 'auto-recover'; maxAutoRecoveries?: number } = {},
   hooks?: ConstructorParameters<typeof Orchestrator>[0]['hooks'],
   storage = new FakeStorage(),
+  runtime: { scheduler?: FakeScheduler; now?: () => number } = {},
 ) {
   const planDir = await mkdtemp(join(tmpdir(), 'pae-orch-'))
   tempDirs.push(planDir)
   const { Orchestrator } = await import('../src/orchestrator.ts')
   const agent = new FakeAgent()
   const { ask, received } = fakeAsk(...askScript)
+  const scheduler = runtime.scheduler ?? fakeScheduler()
   const orchestrator = new Orchestrator({
     agent,
     ask,
@@ -189,13 +205,15 @@ export async function makeOrchestrator(
     planDir,
     storage,
     ...(hooks === undefined ? {} : { hooks }),
+    ...(runtime.scheduler === undefined ? {} : { scheduler }),
+    ...(runtime.now === undefined ? {} : { now: runtime.now }),
   })
   await orchestrator.begin('示例任务') // begin 清空目录（真实语义），之后模型写步骤文件
   for (const step of steps) {
     await writeFile(join(planDir, step.file), `# ${step.title}\n内容`, 'utf8')
   }
   const verdict = await orchestrator.submitPlan(planDir, steps, '测试计划')
-  return { orchestrator, agent, ask, received, verdict, steps, planDir, storage }
+  return { orchestrator, agent, ask, received, verdict, steps, planDir, storage, scheduler }
 }
 
 /** 带"重启后"持久化状态（executing + plan）的可控假件：ask 由测试手动 resolve。 */

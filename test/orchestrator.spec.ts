@@ -1,14 +1,19 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Orchestrator } from '../src/orchestrator.ts'
 import {
   answer,
   cleanupTempDirs,
   FakeAgent,
   fakeAsk,
+  fakeScheduler,
   FakeRevivedSession,
   FakeStorage,
   fakeUserMessage,
   makeOrchestrator,
+  tempDirs,
   type StepSeed,
 } from './helpers.ts'
 
@@ -866,5 +871,70 @@ describe('消息隔离（surface 锚定）', () => {
     const callsB = revivedB.agent.session.replaceCalls
     expect(callsB).toHaveLength(2) // step1 + step2 各锚定一次
     expect((callsB[0]!.message.content[0] as { text: string }).text).toContain('计划摘要')
+  })
+})
+
+describe('批准时定时执行', () => {
+  it('带未来排期批准 → phase=scheduled + scheduledAt 持久化 + scheduler.arm(at)，不启动 run', async () => {
+    const steps: StepSeed[] = [{ file: 'a.md', title: 'A' }]
+    const scheduler = fakeScheduler()
+    // 手工编排：makeOrchestrator 内部已 submitPlan，这里改用 begin+submit 以便先设排期
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-sched-'))
+    tempDirs.push(planDir)
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const agent = new FakeAgent()
+    const { ask } = fakeAsk(answer('pae-approve', '批准'))
+    const storage = new FakeStorage()
+    const orchestrator = new Orchestrator({
+      agent,
+      ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage,
+      scheduler,
+      now: () => 1_700_000_000_000, // 固定“当前时刻”，atEpoch 相对其 +60s
+    })
+    await orchestrator.begin('定时任务')
+    // begin 已重置 planDir：步骤文件须在 begin 后写入（与 makeOrchestrator 同序）
+    await writeFile(join(planDir, 'a.md'), '# A\n内容', 'utf8')
+    const atEpoch = 1_700_000_060_000
+    expect(await orchestrator.applyPendingSchedule(atEpoch)).toEqual({ ok: true })
+    const verdict = await orchestrator.submitPlan(planDir, steps, 'S')
+    expect(verdict).toEqual({ approved: true })
+    expect(storage.state?.phase).toBe('scheduled')
+    expect(storage.state?.scheduledAt).toBe(atEpoch)
+    expect(scheduler.arm).toHaveBeenCalledWith(atEpoch)
+    // 未启动 run：除 kickoff 外没有步骤指令注入
+    await vi.waitFor(() => {
+      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    })
+  })
+
+  it('排期已过/未设排期批准 → 仍走立即执行（现行为），且 scheduler.cancel 未被调用', async () => {
+    const scheduler = fakeScheduler()
+    const { storage, verdict } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+      {},
+      undefined,
+      undefined,
+      { scheduler },
+    )
+    expect(verdict).toEqual({ approved: true })
+    expect(storage.state?.phase).toBe('executing')
+    expect(scheduler.arm).not.toHaveBeenCalled()
+    expect(scheduler.cancel).not.toHaveBeenCalled()
+  })
+
+  it('applyPendingSchedule 仅 planning/scheduled 阶段可用', async () => {
+    const { orchestrator } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+    )
+    // makeOrchestrator 后已 executing：executing 阶段拒绝
+    expect(await orchestrator.applyPendingSchedule(1_800_000_000_000)).toEqual({
+      ok: false,
+      error: expect.stringContaining('阶段'),
+    })
   })
 })
