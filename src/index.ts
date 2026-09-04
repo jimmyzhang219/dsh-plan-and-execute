@@ -23,8 +23,16 @@ import type {} from '@deepseek-ai/dsh-settings'
 // Type-only：todo/write 事件的 SessionEventMap 合并声明由 dsh-tool-todo 拥有。
 import type {} from '@deepseek-ai/dsh-tool-todo'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
-import { PAE_MODELS_NS, PAE_MODELS_SCHEMA, parsePaeModels } from './settings.ts'
 import { fileStorage } from './persist.ts'
+import { ScheduleRegistry } from './schedule.ts'
+import {
+  PAE_MODELS_NS,
+  PAE_MODELS_SCHEMA,
+  PAE_SCHEDULE_NS,
+  PAE_SCHEDULE_SCHEMA,
+  parsePaeModels,
+  parsePaeSchedule,
+} from './settings.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
 import { isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
@@ -90,6 +98,9 @@ function toDriveAgent(agent: Agent): DriveAgent {
  */
 export function apply(ctx: Context, config: Config): void {
   console.log('[dsh-plan-and-execute] plugin loaded')
+  /** 进程内定时注册表（schedule 阶段排期；随插件卸载释放）。 */
+  const scheduleRegistry = new ScheduleRegistry()
+  ctx.effect(() => () => scheduleRegistry.dispose(), 'dsh-plan-and-execute: schedule registry')
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
   /** sessionId → 编排器（settings/updated 桥接按载荷中的 sessionId 定位）。 */
@@ -136,6 +147,8 @@ export function apply(ctx: Context, config: Config): void {
   const ensure = (agent: Agent): Orchestrator => {
     const existing = orchestrators.get(agent.session as object)
     if (existing !== undefined) return existing
+    // bySessionId 键（注册表槽、settings 桥接定位）与 effects 共用 String(agent.id)
+    const sessionId = String(agent.id)
     const planDir = planDirOf(agent)
     const mask = createToolMask(agent)
     const orchestrator = new Orchestrator({
@@ -148,17 +161,25 @@ export function apply(ctx: Context, config: Config): void {
       },
       planDir,
       storage: fileStorage(planDir),
+      // 排期到点由注册表触发 fireScheduledSession（编排器在场直接执行；
+      // 冷会话 resume 补执行——见 fireScheduledSession 注释）
+      scheduler: {
+        arm: (at) => {
+          scheduleRegistry.arm(sessionId, at, () => void fireScheduledSession(sessionId))
+        },
+        cancel: () => scheduleRegistry.cancel(sessionId),
+      },
       hooks: {
         onActivate: mask.activate,
         onRestore: mask.restore,
       },
     })
     orchestrators.set(agent.session as object, orchestrator)
-    bySessionId.set(String(agent.id), orchestrator)
+    bySessionId.set(sessionId, orchestrator)
     ctx.effect(
       () => () => {
         orchestrator.dispose()
-        bySessionId.delete(String(agent.id))
+        bySessionId.delete(sessionId)
       },
       'dsh-plan-and-execute: dispose orchestrators',
     )
@@ -208,6 +229,37 @@ export function apply(ctx: Context, config: Config): void {
     )
     ctx.effect(() => () => disposeTodosRefresh(), 'dsh-plan-and-execute: todos refresh on new turn')
     return orchestrator
+  }
+
+  /**
+   * 排期到点：编排器在场则直接触发执行；不在场（冷会话）经 ctx.agents.resume
+   * 恢复会话 → agent/created → revive() 的 scheduled 分支自动补执行。
+   * resume 依赖部署具备 agents/sessionPersistence 服务；失败仅记日志，
+   * 等会话被打开时按 overdue 补执行（与宿主 schedule 同语义）。
+   */
+  const fireScheduledSession = (sessionId: string): void => {
+    const orchestrator = bySessionId.get(sessionId)
+    if (orchestrator !== undefined) {
+      void orchestrator.fireScheduledRun()
+      return
+    }
+    void (async () => {
+      const agents = ctx.get('agents') as
+        { resume(options: { resumeSessionId: string }): Promise<unknown> } | undefined
+      if (agents === undefined) {
+        ctx.logger.warn(
+          `dsh-plan-and-execute: 排期到点但会话 ${sessionId} 未打开且无 agents 服务，等待打开时补执行`,
+        )
+        return
+      }
+      try {
+        await agents.resume({ resumeSessionId: sessionId })
+      } catch (error) {
+        ctx.logger.warn(
+          `dsh-plan-and-execute: 排期到点恢复会话 ${sessionId} 失败（等待打开时补执行）：${String(error)}`,
+        )
+      }
+    })()
   }
 
   // —— 命令入口（命令注册表为可选服务：headless 部署无 commands 时插件仍可加载）——
@@ -269,22 +321,42 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
 
-  // —— settings 命名空间：审批卡下拉静默写通道 ——
-  // 注册失败（如部署已有同名命名空间）则静默降级：审批卡下拉不可用，其余功能不受影响。
+  // —— settings 命名空间：审批卡静默写通道（模型下拉 / 执行时间）——
+  // 注册失败（如部署已有同名命名空间）则静默降级：审批卡写通道不可用，其余功能不受影响。
   let settingsRegistered = false
   try {
     ctx.settings.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
+    ctx.settings.register(PAE_SCHEDULE_NS, PAE_SCHEDULE_SCHEMA)
     settingsRegistered = true
   } catch (error) {
     ctx.logger.warn(
-      `dsh-plan-and-execute: settings 命名空间注册失败（审批卡模型下拉不可用）：${String(error)}`,
+      `dsh-plan-and-execute: settings 命名空间注册失败（审批卡下拉/执行时间不可用）：${String(error)}`,
     )
   }
   if (settingsRegistered) {
-    // —— settings/updated 桥接：审批卡下拉 → 编排器 applyStepModels ——
-    // 载荷按 sessionId 分键；先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过。
+    // —— settings/updated 桥接：审批卡写通道 → 编排器（applyStepModels / applyPendingSchedule）——
+    // 载荷按 sessionId 分键定位编排器；无对应编排器的会话静默跳过（幂等容错）。
     ctx.on('settings/updated', (ns: string, next: unknown) => {
+      if (ns === PAE_SCHEDULE_NS) {
+        // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
+        // 若 void 吞掉返回值，异步失败会变成 unhandled rejection（同模型分支语义）。
+        return (async () => {
+          for (const [sessionId, section] of Object.entries(
+            (next ?? {}) as Record<string, unknown>,
+          )) {
+            const orchestrator = bySessionId.get(sessionId)
+            if (orchestrator === undefined) continue
+            const at = parsePaeSchedule(section)
+            if (at === undefined) continue // 非法载荷忽略
+            const result = await orchestrator.applyPendingSchedule(at)
+            if (!result.ok) {
+              ctx.logger.warn(`dsh-plan-and-execute: 应用执行排期失败：${result.error}`)
+            }
+          }
+        })()
+      }
       if (ns !== PAE_MODELS_NS) return
+      // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
       // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
       // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。
       return (async () => {

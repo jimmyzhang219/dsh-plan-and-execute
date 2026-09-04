@@ -36,12 +36,18 @@ function fakeCtx() {
   }
   /** settings 假服务：register 逐用例可改写（抛错模拟重复注册降级路径）。 */
   const settings = { register: vi.fn(() => {}) }
+  /**
+   * agents 假服务：resume 记录调用（冷会话补执行路径；fire 由注册表驱动、
+   * 其行为在 schedule.spec 覆盖）。
+   */
+  const agents = { resume: vi.fn(async () => ({ agent: {}, dispose: async () => {} })) }
   const ctx = {
     registered,
     listeners,
     sessionTitle,
     llm,
     settings,
+    agents,
     commands: {
       register: (definition: Record<string, unknown>) => {
         registered.commands.push(definition)
@@ -72,6 +78,7 @@ function fakeCtx() {
       if (key === 'sessionTitle') return sessionTitle
       if (key === 'llm') return llm
       if (key === 'settings') return settings
+      if (key === 'agents') return agents
       return { ask: async () => ({ answers: [] }) }
     }),
     effect: vi.fn(() => () => {}),
@@ -679,5 +686,40 @@ describe('settings/updated 桥接', () => {
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('settings 命名空间注册失败'),
     )
+  })
+})
+
+describe('定时排期接线', () => {
+  it('注册 pae-schedule settings 命名空间', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    expect(ctx.settings.register).toHaveBeenCalledWith('pae-step-models', expect.anything())
+    expect(ctx.settings.register).toHaveBeenCalledWith('pae-schedule', expect.anything())
+  })
+
+  it('settings/updated（pae-schedule）对未知会话不抛（幂等容错）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const bridge = settingsListenerOf(ctx)
+    await expect(
+      bridge!('pae-schedule', { ghost: { at: 1_800_000_000_000 } }, {}, 'client'),
+    ).resolves.toBeUndefined()
+  })
+
+  it('agent/created 对 scheduled 阶段触发 revive（不提前返回，弹回显卡）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('scheduled', {
+      scheduledAt: Date.now() + 60_000,
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    await writeFile(join(cwd, '.pae', 'sess-1', 'a.md'), '# A\n内容', 'utf8')
+    const agent = fakeAgent('none')
+    await fireCreated(ctx, agent)
+    // revive 的 scheduled 分支复弹 plan-review ask → 必经 userQuestions 服务
+    expect(ctx.get).toHaveBeenCalledWith('userQuestions')
   })
 })
