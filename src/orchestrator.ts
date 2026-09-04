@@ -820,9 +820,23 @@ export class Orchestrator {
         ],
         controller.signal,
       )
-      if (answer === 'dismissed') return 'dismissed'
+      if (answer === 'dismissed') {
+        // 卡关闭即失效：意图不得带入下一次弹卡/审批
+        this.pendingSchedule = undefined
+        return 'dismissed'
+      }
+      // 卡悬空期间到点触发（fireScheduledRun）已把 phase 迁出 scheduled、执行已在跑，
+      // 此答案作废——复检不依赖宿主 abort 行为（答案可能在 abort 前已 resolve 入队）
+      if (this.state.phase !== 'scheduled') {
+        this.pendingSchedule = undefined
+        return 'dismissed'
+      }
       const item = answer.answers.find((entry) => entry.id === 'pae-approve')
-      if (item?.selected[0] !== APPROVE_LABEL) return 'replan'
+      if (item?.selected[0] !== APPROVE_LABEL) {
+        // 驳回（回规划）即失效：意图不得带入下一次 submitPlan
+        this.pendingSchedule = undefined
+        return 'replan'
+      }
       const intent = this.pendingSchedule
       this.pendingSchedule = undefined
       if (intent === null || (typeof intent === 'number' && intent <= this.now())) return 'now'
