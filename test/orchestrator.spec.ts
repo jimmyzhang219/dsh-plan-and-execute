@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import type { Orchestrator } from '../src/orchestrator.ts'
 import {
   answer,
@@ -936,5 +937,174 @@ describe('批准时定时执行', () => {
       ok: false,
       error: expect.stringContaining('阶段'),
     })
+  })
+})
+
+/** 挂起式 ask 控制：收到的问询进队列，回答由测试在需要的时机 resolveNext。 */
+function manualAsk() {
+  const receivedQuestions: AskUserQuestionItem[][] = []
+  let resolver: ((value: AskUserQuestionAnswer) => void) | undefined
+  return {
+    ask: (questions: AskUserQuestionItem[]): Promise<AskUserQuestionAnswer> => {
+      receivedQuestions.push(questions)
+      return new Promise((resolve) => {
+        resolver = resolve
+      })
+    },
+    receivedQuestions,
+    resolveNext: (value: AskUserQuestionAnswer): void => {
+      resolver?.(value)
+    },
+  }
+}
+
+/** 构造 phase='scheduled'（持久化态）的编排器 + 挂起式 ask 控制。 */
+async function buildScheduledOrchestrator(options: { at: number; nowMs: number }) {
+  const dir = await mkdtemp(join(tmpdir(), 'pae-sched-rev-'))
+  tempDirs.push(dir)
+  await writeFile(join(dir, 'a.md'), '# A\n内容', 'utf8')
+  const { Orchestrator } = await import('../src/orchestrator.ts')
+  const agent = new FakeAgent()
+  const scheduler = fakeScheduler()
+  const storage = new FakeStorage()
+  storage.state = {
+    phase: 'scheduled',
+    task: 'T',
+    planDir: dir,
+    scheduledAt: options.at,
+    plan: { planDir: dir, steps: [{ file: 'a.md', title: 'A' }] },
+    stepReports: [],
+    statuses: {},
+    skipped: [],
+  }
+  const askControl = manualAsk()
+  const orchestrator = new Orchestrator({
+    agent,
+    ask: askControl.ask,
+    storage,
+    scheduler,
+    now: () => options.nowMs,
+    config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+    planDir: dir,
+  })
+  return { orchestrator, agent, scheduler, storage, askControl }
+}
+
+describe('scheduled 恢复与到点触发', () => {
+  it('revive：排期已过 → 自动补执行（不弹卡），run 注入第一步', async () => {
+    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator(
+      { at: 1_999_999_000_000, nowMs: 2_000_000_000_000 }, // nowMs 晚于 scheduledAt
+    )
+    await orchestrator.revive()
+    await vi.waitFor(() => {
+      expect(storage.state?.phase).toBe('executing')
+    })
+    expect(askControl.receivedQuestions).toHaveLength(0) // 未弹任何问询
+    expect(scheduler.cancel).toHaveBeenCalled()
+    // 第一步指令已注入（kickoff 之外的第一条插件指令；run 首步 readFile 为 macrotask，需 waitFor 真证注入）
+    await vi.waitFor(() => {
+      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    })
+  })
+
+  it('revive：排期未到 → 复弹 plan-review 卡（detail 含执行排期行）；批准不改 → 保持原排期', async () => {
+    const at = 2_000_000_000_000
+    const { orchestrator, scheduler, storage, askControl } = await buildScheduledOrchestrator({
+      at,
+      nowMs: at - 60_000,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+    const question = askControl.receivedQuestions[0]![0]!
+    expect(question.intent).toEqual({ kind: 'plan-review', approve: '批准' })
+    expect(question.detail).toContain('执行排期：')
+    askControl.resolveNext(answer('pae-approve', '批准')) // 未改动 → 批准
+    await revivePromise
+    expect(storage.state?.phase).toBe('scheduled')
+    expect(storage.state?.scheduledAt).toBe(at) // 原排期保持
+    expect(scheduler.arm).toHaveBeenCalledWith(at)
+  })
+
+  it('revive 回显卡：改时间批准 → 替换排期（scheduledAt 更新 + arm 新时刻）', async () => {
+    const oldAt = 2_000_000_000_000
+    const newAt = 2_000_000_060_000
+    const { orchestrator, scheduler, storage, askControl } = await buildScheduledOrchestrator({
+      at: oldAt,
+      nowMs: oldAt - 60_000,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+    await orchestrator.applyPendingSchedule(newAt) // 用户在回显卡上改时间（settings 旁路）
+    askControl.resolveNext(answer('pae-approve', '批准'))
+    await revivePromise
+    expect(storage.state?.phase).toBe('scheduled')
+    expect(storage.state?.scheduledAt).toBe(newAt)
+    expect(scheduler.arm).toHaveBeenLastCalledWith(newAt)
+  })
+
+  it('revive 回显卡：改为立即批准 → 取消排期并立即执行', async () => {
+    const at = 2_000_000_000_000
+    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator(
+      { at, nowMs: at - 60_000 },
+    )
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+    await orchestrator.applyPendingSchedule(null) // 用户在回显卡上清为立即执行
+    askControl.resolveNext(answer('pae-approve', '批准'))
+    await revivePromise
+    await vi.waitFor(() => {
+      expect(storage.state?.phase).toBe('executing')
+    })
+    expect(scheduler.cancel).toHaveBeenCalled()
+    // 首步指令注入同受 readFile macrotask 制约，需 waitFor 真证注入
+    await vi.waitFor(() => {
+      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    })
+  })
+
+  it('fireScheduledRun：到点启动执行；未到点/重复触发 → false 不动作', async () => {
+    // 经真实批准路径造 scheduled（覆盖 runtime 字段接线），再拨快时钟触发
+    const dir = await mkdtemp(join(tmpdir(), 'pae-sched-fire-'))
+    tempDirs.push(dir)
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const agent = new FakeAgent()
+    const scheduler = fakeScheduler()
+    const nowRef = { value: 1_700_000_000_000 }
+    const { ask } = fakeAsk(answer('pae-approve', '批准'))
+    const storage = new FakeStorage()
+    const orchestrator = new Orchestrator({
+      agent,
+      ask,
+      storage,
+      scheduler,
+      now: () => nowRef.value,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: dir,
+    })
+    await orchestrator.begin('定时执行')
+    // begin 已重置 planDir：步骤文件须在 begin 后写入（与 makeOrchestrator 同序）
+    await writeFile(join(dir, 'a.md'), '# A\n内容', 'utf8')
+    const at = nowRef.value + 60_000
+    await orchestrator.applyPendingSchedule(at)
+    const verdict = await orchestrator.submitPlan(dir, [{ file: 'a.md', title: 'A' }], 'S')
+    expect(verdict).toEqual({ approved: true })
+    expect(storage.state?.phase).toBe('scheduled')
+
+    // 未到点：不触发
+    expect(await orchestrator.fireScheduledRun()).toBe(false)
+    expect(storage.state?.phase).toBe('scheduled')
+
+    // 拨快到点后：触发执行
+    nowRef.value = at + 1
+    expect(await orchestrator.fireScheduledRun()).toBe(true)
+    expect(storage.state?.phase).toBe('executing')
+    expect(storage.state?.scheduledAt).toBeUndefined()
+    // kickoff + 首步指令（run 首步 readFile 为 macrotask，需 waitFor 真证注入）
+    await vi.waitFor(() => {
+      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(2)
+    })
+
+    // 二次触发（阶段已 executing）：幂等拒绝
+    expect(await orchestrator.fireScheduledRun()).toBe(false)
   })
 })

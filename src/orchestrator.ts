@@ -23,6 +23,7 @@ import {
   type PersistedStorage,
 } from './persist.ts'
 import {
+  formatScheduleAt,
   kickoffInstruction,
   nudgeInstruction,
   planReviewDetail,
@@ -279,6 +280,7 @@ export class Orchestrator {
     this.state.stepIndex = undefined
     this.state.pausedReason = undefined
     this.state.plan = undefined
+    this.state.scheduledAt = undefined
     this.state.stepReports.clear()
     this.state.statuses.clear()
     this.state.stepModels.clear()
@@ -752,6 +754,7 @@ export class Orchestrator {
   private async enterReplan(plan: PaePlanPayload): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
+    this.state.scheduledAt = undefined
     this.state.stepModels.clear()
     await this.save()
     this.replaceAll(replanContextMessage(this.lastFeedback, plan))
@@ -791,6 +794,49 @@ export class Orchestrator {
     return 'continue'
   }
 
+  /** 复弹 plan-review 审批卡（scheduled 回显卡）。返回：'re-approve'=保持/已替换排期；'now'=改为立即执行；'replan'=取消排期回规划；'dismissed'=卡关闭保持原排期。 */
+  private async askScheduledReview(
+    plan: PaePlanPayload,
+    at: number,
+  ): Promise<'re-approve' | 'replan' | 'now' | 'dismissed'> {
+    // 回显卡意图默认「保持原排期」：仅当用户经 settings 旁路改过才覆盖
+    this.pendingSchedule = undefined
+    const controller = new AbortController()
+    this.currentAskAbort = controller
+    try {
+      const answer = await this.askOrDismiss(
+        [
+          {
+            id: 'pae-approve',
+            header: 'Plan review',
+            question: `计划已排定于 ${formatScheduleAt(at)} 执行，可在此修改执行时间后批准；`,
+            detail: planReviewDetail(plan.steps, plan.planDir, at),
+            options: [
+              { label: APPROVE_LABEL, description: '按卡片上的执行时间生效（未改动则保持原排期）' },
+              { label: KEEP_LABEL, description: '取消已排定的执行，回到规划阶段修改计划' },
+            ],
+            intent: { kind: 'plan-review', approve: APPROVE_LABEL },
+          },
+        ],
+        controller.signal,
+      )
+      if (answer === 'dismissed') return 'dismissed'
+      const item = answer.answers.find((entry) => entry.id === 'pae-approve')
+      if (item?.selected[0] !== APPROVE_LABEL) return 'replan'
+      const intent = this.pendingSchedule
+      this.pendingSchedule = undefined
+      if (intent === null || (typeof intent === 'number' && intent <= this.now())) return 'now'
+      if (typeof intent === 'number') {
+        this.state.scheduledAt = intent
+        await this.save()
+        this.deps.scheduler?.arm(intent)
+      }
+      return 're-approve'
+    } finally {
+      this.currentAskAbort = undefined
+    }
+  }
+
   /**
    * 恢复入口（agent/created 重建、或 paused 态命令重入）。先加载持久化
    * 状态，再按折叠状态弹对应交互并续跑；driver 由本方法自身充当。
@@ -802,6 +848,47 @@ export class Orchestrator {
     this.applyPersisted(persisted)
     this.deps.hooks?.onActivate?.()
     const folded = this.folded()
+    if (folded.phase === 'scheduled') {
+      const plan = this.state.plan
+      const at = this.state.scheduledAt
+      if (plan === undefined || at === undefined) {
+        // 快照损坏：终止态兜底，避免永久悬挂
+        this.state.phase = 'aborted'
+        await this.save().catch(() => {})
+        return
+      }
+      if (at <= this.now()) {
+        // 排期已过（进程重启错过 timer）：自动补执行，无需再确认（用户此前已批准）
+        this.deps.scheduler?.cancel()
+        this.state.scheduledAt = undefined
+        this.state.phase = 'executing'
+        this.state.stepIndex = 0
+        await this.save()
+        this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+        void this.run(plan, 1)
+        return
+      }
+      // 排期未到：重 arm（幂等替换）+ 复弹审批卡（可修改执行时间后批准）
+      this.deps.scheduler?.arm(at)
+      const choice = await this.askScheduledReview(plan, at)
+      if (choice === 'replan') {
+        this.deps.scheduler?.cancel()
+        this.state.scheduledAt = undefined
+        this.lastFeedback = '用户取消了已排定的执行。可调整步骤文件后重新提交。'
+        return this.enterReplan(plan)
+      }
+      if (choice === 'now') {
+        this.deps.scheduler?.cancel()
+        this.state.scheduledAt = undefined
+        this.state.phase = 'executing'
+        this.state.stepIndex = 0
+        await this.save()
+        this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+        void this.run(plan, 1)
+        return
+      }
+      return // 're-approve'（保持/已替换排期）与 'dismissed'（卡关闭，原排期继续）均无需动作
+    }
     if (folded.phase === 'paused') {
       const reason = folded.pausedReason ?? 'failure'
       const plan = this.state.plan
@@ -879,6 +966,28 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * 定时到点入口（ScheduleRegistry 触发）。幂等防重：仅 phase='scheduled' 且
+   * scheduledAt 已到点时启动执行；否则返回 false（迟到/过期触发直接作废）。
+   * @returns 是否本次调用真正启动了执行。
+   */
+  async fireScheduledRun(): Promise<boolean> {
+    const plan = this.state.plan
+    const at = this.state.scheduledAt
+    if (this.state.phase !== 'scheduled' || plan === undefined || at === undefined) return false
+    if (at > this.now()) return false
+    // 取消悬空的回显卡（若有），防卡片与状态失同步
+    this.currentAskAbort?.abort()
+    this.deps.scheduler?.cancel()
+    this.state.scheduledAt = undefined
+    this.state.phase = 'executing'
+    this.state.stepIndex = 0
+    await this.save()
+    this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+    void this.run(plan, 1)
+    return true
+  }
+
   /** 加载持久化快照到内存（resume 路径）。 */
   private applyPersisted(persisted: PersistedOrchestratorState): void {
     this.state.phase = persisted.phase
@@ -886,6 +995,7 @@ export class Orchestrator {
     this.state.planDir = persisted.planDir
     this.state.stepIndex = persisted.stepIndex
     this.state.pausedReason = persisted.pausedReason
+    this.state.scheduledAt = persisted.scheduledAt
     this.state.plan = persisted.plan
     const restored = restoreState(persisted)
     this.state.stepReports = restored.stepReports
