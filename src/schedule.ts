@@ -21,6 +21,8 @@ export interface ClockLike {
 
 /** 单会话排期槽。 */
 interface Slot {
+  /** 会话 id（注册表键；兼作归属 token，回调触发时校验，陈旧槽据此作废）。 */
+  id: string
   /** 排期的执行时刻（epoch ms）。 */
   at: number
   /** 到点回调。 */
@@ -30,7 +32,8 @@ interface Slot {
 }
 
 /**
- * 会话级定时注册表（按 sessionId 单槽；arm 替换旧槽、触发/取消即清）。
+ * 会话级定时注册表（按 sessionId 单槽；arm 替换旧槽、触发/取消即清；
+ * 到点回调先校验槽归属，cancel/替换后迟到的陈旧回调静默作废）。
  * @param clock - 注入的时钟与定时器（生产默认全局 setTimeout/Date.now）。
  */
 export class ScheduleRegistry {
@@ -47,7 +50,7 @@ export class ScheduleRegistry {
   /** 注册/替换某会话的到点触发（同 id 旧排期自动作废）。 */
   arm(sessionId: string, at: number, fire: () => void): void {
     this.cancel(sessionId)
-    const slot: Slot = { at, fire }
+    const slot: Slot = { id: sessionId, at, fire }
     this.slots.set(sessionId, slot)
     this.step(slot)
   }
@@ -67,10 +70,12 @@ export class ScheduleRegistry {
 
   /** 排一段：距 at 若超过单次上限则拆段，否则到期即 fire 并清槽。 */
   private step(slot: Slot): void {
+    // token 校验：clearTimeout 挡不住已入队回调，槽被 cancel/替换后其陈旧回调在此静默作废
+    if (this.slots.get(slot.id) !== slot) return
     const remain = slot.at - this.clock.now()
     if (remain <= 0) {
       slot.timer = undefined
-      this.slots.delete(this.slotIdOf(slot)) // fire 前先清槽，保证单次触发
+      this.slots.delete(slot.id) // fire 前先清槽，保证单次触发
       slot.fire()
       return
     }
@@ -79,10 +84,5 @@ export class ScheduleRegistry {
       slot.timer = undefined
       this.step(slot)
     }, delay)
-  }
-
-  private slotIdOf(slot: Slot): string {
-    for (const [id, candidate] of this.slots) if (candidate === slot) return id
-    throw new Error('schedule slot not registered')
   }
 }
