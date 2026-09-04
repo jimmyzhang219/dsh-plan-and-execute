@@ -927,6 +927,37 @@ describe('批准时定时执行', () => {
     expect(scheduler.cancel).not.toHaveBeenCalled()
   })
 
+  it('applyPendingSchedule 过去的时刻后批准 → 降级立即执行（不 arm、scheduledAt 无脏写）', async () => {
+    const steps: StepSeed[] = [{ file: 'a.md', title: 'A' }]
+    const scheduler = fakeScheduler()
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-sched-'))
+    tempDirs.push(planDir)
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const agent = new FakeAgent()
+    const { ask } = fakeAsk(answer('pae-approve', '批准'))
+    const storage = new FakeStorage()
+    const orchestrator = new Orchestrator({
+      agent,
+      ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage,
+      scheduler,
+      now: () => 1_700_000_000_000, // 固定“当前时刻”，past 相对其早 60s
+    })
+    await orchestrator.begin('定时任务')
+    // begin 已重置 planDir：步骤文件须在 begin 后写入（与同组构造同序）
+    await writeFile(join(planDir, 'a.md'), '# A\n内容', 'utf8')
+    const past = 1_699_999_940_000 // 早于 now 的时刻（迟到的排期意图）
+    expect(await orchestrator.applyPendingSchedule(past)).toEqual({ ok: true })
+    const verdict = await orchestrator.submitPlan(planDir, steps, 'S')
+    expect(verdict).toEqual({ approved: true })
+    // 排期意图已滑过 → 走立即执行路径（phase=executing），不 arm、scheduledAt 不落盘
+    expect(storage.state?.phase).toBe('executing')
+    expect(storage.state?.scheduledAt).toBeUndefined()
+    expect(scheduler.arm).not.toHaveBeenCalled()
+  })
+
   it('applyPendingSchedule 仅 planning/scheduled 阶段可用', async () => {
     const { orchestrator } = await makeOrchestrator(
       [{ file: 'a.md', title: 'A' }],

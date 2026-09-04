@@ -182,12 +182,13 @@ describe('执行时间控件', () => {
     expect(screen.getByText(/计划于 2026-09-06 10:00 执行/)).toBeTruthy()
   })
 
-  it('点「立即执行」清除 → settings.update(PAE_SCHEDULE_NS, {at: null})', async () => {
+  it('点「清除排期」× → settings.update(PAE_SCHEDULE_NS, {at: null})', async () => {
     const update = vi.fn(async () => undefined)
     const at = Date.now() + 86_400_000
     render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
-    // 排期态 chip 旁的 ×（aria-label=立即执行）与浮层内「立即执行」按钮同语义（clearSchedule）
-    fireEvent.click(screen.getByRole('button', { name: /立即执行/ }))
+    // 排期态 chip 旁的 ×（aria-label=清除排期）与浮层内「立即执行」按钮同属 clearSchedule，
+    // 但可访问名不同（× 用 scheduleClear，避免与浮层按钮重名）
+    fireEvent.click(screen.getByRole('button', { name: /清除排期/ }))
     await waitFor(() => {
       expect(update).toHaveBeenCalledWith(PAE_SCHEDULE_NS, { 'sess-1': { at: null } }, undefined)
     })

@@ -95,7 +95,9 @@ export function parseScheduleAt(text: string): number | undefined {
 
 /**
  * 从审批问题详情（宿主 planReviewDetail 输出，本插件自有格式）解析步骤数据。
- * 格式：首行 `计划目录：<planDir>`，后续行 `N. <标题> — <文件>[ ⚠ 确认点]`。
+ * 格式：首行 `计划目录：<planDir>`，后续行 `N. <标题> — <文件>[ ⚠ 确认点]`；
+ * 执行排期行协议：`执行排期：YYYY-MM-DD HH:mm`（本地时间，与服务端 formatScheduleAt
+ * 同格式，见 parseScheduleAt）——解析成功即作为 scheduledAt 回显，畸形行跳过不打断其他行。
  * 标题可含 " — "（以最后一个分隔符切分）；非标准行跳过；缺计划目录行返回 undefined。
  * 注意：审批卡不读 chat 快照（composer 座位 useChat 会导致宿主聊天快照
  * 构建器脱绑崩溃——2026-08-30 线上事故），步骤数据一律来自本函数。
@@ -136,7 +138,12 @@ export function buildSettingsPatch(
   return { [sessionId]: serializeStepModels(selection) }
 }
 
-/** 排期意图 → settings.update 载荷（sessionId 键；null=立即执行）。 */
+/**
+ * 排期意图 → settings.update 载荷（pae-schedule 命名空间；sessionId 键）。
+ * @param sessionId - 会话标识（载荷键；宿主侧按此定位编排器）。
+ * @param at - 目标执行时刻（epoch ms）；null 表示清除排期为立即执行。
+ * @returns pae-schedule 命名空间的 update 载荷。
+ */
 export function buildSchedulePatch(
   sessionId: string,
   at: number | null,

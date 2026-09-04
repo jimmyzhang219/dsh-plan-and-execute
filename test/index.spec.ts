@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
+import type { AskUserQuestionAnswer } from '@deepseek-ai/dsh-user-questions'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PersistedOrchestratorState } from '../src/persist.ts'
@@ -34,8 +35,8 @@ function fakeCtx() {
       model: c.model,
     })),
   }
-  /** settings 假服务：register 逐用例可改写（抛错模拟重复注册降级路径）。 */
-  const settings = { register: vi.fn(() => {}) }
+  /** settings 假服务：register 逐用例可改写（抛错模拟重复注册降级路径；ns 供按命名空间挑错）。 */
+  const settings = { register: vi.fn((_ns: string) => {}) }
   /**
    * agents 假服务：resume 记录调用（冷会话补执行路径；fire 由注册表驱动、
    * 其行为在 schedule.spec 覆盖）。
@@ -687,6 +688,43 @@ describe('settings/updated 桥接', () => {
       expect.stringContaining('settings 命名空间注册失败'),
     )
   })
+
+  it('settings.register 仅 pae-schedule 抛错 → 排期功能降级，models 桥接保留可用', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    ctx.settings.register.mockImplementation((ns: string) => {
+      if (ns === 'pae-schedule') {
+        throw new Error('settings namespace "pae-schedule" is already registered')
+      }
+    })
+    expect(() =>
+      apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
+    ).not.toThrow()
+    // 降级 warn 仅针对 pae-schedule（models 注册成功不记 warn）
+    expect(ctx.logger.warn).toHaveBeenCalledTimes(1)
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('pae-schedule'))
+    // models 桥接仍注册：对 pae-step-models 载荷照常应用
+    const listener = settingsListenerOf(ctx)!
+    expect(listener).toBeDefined()
+    await seedState('planning', {
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    const agent = fakeAgent('planning')
+    await fireCreated(ctx, agent)
+    await listener(
+      'pae-step-models',
+      { 'sess-1': { 1: { provider: 'a', model: 'm' } } },
+      {},
+      'user',
+    )
+    await vi.waitFor(async () => {
+      expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'a', model: 'm' })
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
+    })
+    // 注册失败命名空间（归部署中其他插件）的载荷不越权处理：静默跳过、不抛错
+    expect(() => listener('pae-schedule', { 'sess-1': { at: 1 } }, {}, 'client')).not.toThrow()
+  })
 })
 
 describe('定时排期接线', () => {
@@ -721,5 +759,41 @@ describe('定时排期接线', () => {
     await fireCreated(ctx, agent)
     // revive 的 scheduled 分支复弹 plan-review ask → 必经 userQuestions 服务
     expect(ctx.get).toHaveBeenCalledWith('userQuestions')
+  })
+
+  it('seam：scheduled 回显卡的撤销 signal 穿过 askFor 到达 userQuestions 服务（未 abort）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    // 可记录式 userQuestions 假服务：覆盖默认 get 分发（askFor 每次经 get('userQuestions') 取服务）
+    const userQuestions = {
+      ask: vi.fn(
+        async (_options: {
+          questions: unknown[]
+          agent: unknown
+          signal?: AbortSignal
+        }): Promise<AskUserQuestionAnswer> => ({
+          answers: [{ id: 'pae-approve', selected: ['批准'], custom: '' }],
+        }),
+      ),
+    }
+    ctx.get.mockImplementation((key: string) =>
+      key === 'userQuestions' ? userQuestions : undefined,
+    )
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('scheduled', {
+      scheduledAt: Date.now() + 60_000,
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    await writeFile(join(cwd, '.pae', 'sess-1', 'a.md'), '# A\n内容', 'utf8')
+    const agent = fakeAgent('none')
+    await fireCreated(ctx, agent)
+    // 回显卡的 ask 经 askFor → service.ask：请求必须携带编排器的撤销 signal（宿主 ASK_ABORTED 语义的接线证据）
+    await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(1))
+    const request = userQuestions.ask.mock.calls[0]![0]!
+    expect(request.signal).toBeDefined()
+    expect(request.signal?.aborted).toBe(false)
+    // 答案消费后不二次弹卡（等待窗口内无多余 ask）
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(userQuestions.ask).toHaveBeenCalledTimes(1)
   })
 })

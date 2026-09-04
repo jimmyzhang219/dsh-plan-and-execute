@@ -11,7 +11,7 @@ import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 // 值导入：当前宿主（dsh-v0.1.2+）把 surface 区间与 sourceEventSeqs 品牌化为
 // SessionSeq（运行时为校验+同值返回的 number），append 边界需经构造器承认。
 import { SessionSeq } from '@deepseek-ai/dsh-session'
-import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
+import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 // Type-only：激活各宿主包的 Context 合并（ctx.commands/tools/systemPrompt/sessionTitle/事件类型）。
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-system-prompt'
@@ -113,11 +113,22 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /** 用户交互通道包装（部署无 userQuestions 时抛错）。 */
-  const askFor = (agent: Agent) => (questions: AskUserQuestionItem[]) => {
-    const service = ctx.get('userQuestions')
-    if (service === undefined) throw new Error('no user-questions channel available')
-    return service.ask({ questions, agent })
-  }
+  const askFor =
+    (agent: Agent) =>
+    (
+      questions: AskUserQuestionItem[],
+      options?: { signal?: AbortSignal },
+    ): Promise<AskUserQuestionAnswer> => {
+      const service = ctx.get('userQuestions')
+      if (service === undefined) throw new Error('no user-questions channel available')
+      // signal 原样透传给宿主服务（编排器到点触发前的撤销句柄，宿主据此拒绝 ASK_ABORTED）；
+      // 未提供时保持既有调用形状（宿主 ask 请求的 signal 字段可选）
+      return service.ask(
+        options?.signal === undefined
+          ? { questions, agent }
+          : { questions, agent, signal: options.signal },
+      )
+    }
 
   /**
    * 编排激活时对当前 agent 排除 plan-mode 的 exit_plan_mode 工具（agent-scoped
@@ -232,7 +243,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * 排期到点：编排器在场则直接触发执行；不在场（冷会话）经 ctx.agents.resume
+   * 排期到点：编排器在场则直接触发执行；不在场（冷会话）经 ctx.get('agents')?.resume
    * 恢复会话 → agent/created → revive() 的 scheduled 分支自动补执行。
    * resume 依赖部署具备 agents/sessionPersistence 服务；失败仅记日志，
    * 等会话被打开时按 overdue 补执行（与宿主 schedule 同语义）。
@@ -253,6 +264,8 @@ export function apply(ctx: Context, config: Config): void {
         return
       }
       try {
+        // resume() 返回的 AgentHandle 不 dispose 是有意为之：恢复出的 live agent
+        // 由宿主/Web 收养、随应用生命周期存续（销毁会话属宿主职责，非本插件持有）
         await agents.resume({ resumeSessionId: sessionId })
       } catch (error) {
         ctx.logger.warn(
@@ -322,22 +335,33 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(createReportStepTool(lookup))
 
   // —— settings 命名空间：审批卡静默写通道（模型下拉 / 执行时间）——
-  // 注册失败（如部署已有同名命名空间）则静默降级：审批卡写通道不可用，其余功能不受影响。
-  let settingsRegistered = false
+  // 两个命名空间独立注册、独立降级：单个注册失败（如部署已有同名命名空间）只
+  // 使对应写通道不可用，不得连带杀死另一个命名空间的 settings/updated 桥接。
+  let modelsNsRegistered = false
   try {
     ctx.settings.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
-    ctx.settings.register(PAE_SCHEDULE_NS, PAE_SCHEDULE_SCHEMA)
-    settingsRegistered = true
+    modelsNsRegistered = true
   } catch (error) {
     ctx.logger.warn(
-      `dsh-plan-and-execute: settings 命名空间注册失败（审批卡下拉/执行时间不可用）：${String(error)}`,
+      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
     )
   }
-  if (settingsRegistered) {
+  let scheduleNsRegistered = false
+  try {
+    ctx.settings.register(PAE_SCHEDULE_NS, PAE_SCHEDULE_SCHEMA)
+    scheduleNsRegistered = true
+  } catch (error) {
+    ctx.logger.warn(
+      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_SCHEDULE_NS}（审批卡执行时间不可用）：${String(error)}`,
+    )
+  }
+  if (modelsNsRegistered || scheduleNsRegistered) {
     // —— settings/updated 桥接：审批卡写通道 → 编排器（applyStepModels / applyPendingSchedule）——
     // 载荷按 sessionId 分键定位编排器；无对应编排器的会话静默跳过（幂等容错）。
+    // 注册失败命名空间的分支在各自入口跳过（该 ns 归部署中其他插件所有，不越权处理）。
     ctx.on('settings/updated', (ns: string, next: unknown) => {
       if (ns === PAE_SCHEDULE_NS) {
+        if (!scheduleNsRegistered) return
         // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
         // 若 void 吞掉返回值，异步失败会变成 unhandled rejection（同模型分支语义）。
         return (async () => {
@@ -356,6 +380,7 @@ export function apply(ctx: Context, config: Config): void {
         })()
       }
       if (ns !== PAE_MODELS_NS) return
+      if (!modelsNsRegistered) return
       // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
       // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
       // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。

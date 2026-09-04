@@ -206,7 +206,15 @@ export function formatScheduleAt(at: number): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
-/** 审批弹窗的计划清单详情文本（步骤号 + 标题 + 文件 + 确认点标记；可选排期回显行）。 */
+/**
+ * 审批弹窗的计划清单详情文本（步骤号 + 标题 + 文件 + 确认点标记；可选排期回显行）。
+ * 行协议：首行 `计划目录：<planDir>`，scheduledAt 提供时其后插入
+ * `执行排期：YYYY-MM-DD HH:mm`（本地时间，client parsePlanDetail 依此行回显）。
+ * @param steps - 计划步骤清单（每步渲染一行 `N. <标题> — <文件>[ ⚠ 确认点]`）。
+ * @param planDir - 计划目录（原样写入首行，client 据此定位步骤文件）。
+ * @param scheduledAt - 已排定执行时刻（epoch ms）；缺省不渲染排期回显行。
+ * @returns 审批详情文本。
+ */
 export function planReviewDetail(
   steps: readonly PlanStep[],
   planDir: string,

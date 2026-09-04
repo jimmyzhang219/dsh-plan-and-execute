@@ -234,7 +234,7 @@ export function PaeReviewCard({
                 <button
                   type="button"
                   className="pae-schedule-clear"
-                  aria-label={t('scheduleNow')}
+                  aria-label={t('scheduleClear')}
                   onClick={clearSchedule}
                 >
                   ×

@@ -18,11 +18,10 @@ export const zh = {
   feedback: '驳回反馈',
   feedbackHint: '选「继续修改」时附上反馈，可选；新增的独立任务会成为新步骤',
   discuss: '讨论',
-  scheduleNow: '立即执行', // chip 默认态 + 浮层清除按钮
-  scheduleTitle: '计划执行时间', // 浮层标题
+  scheduleNow: '立即执行', // chip 默认态 + 浮层「立即执行」按钮
+  scheduleClear: '清除排期', // 排期态 chip × 的可访问名（与浮层「立即执行」按钮区分）
   scheduleDate: '日期',
   scheduleTime: '时间',
-  scheduleSet: '设置排期', // chip 可访问名
   scheduleAtHint: '计划于 %s 执行', // chip 排期态模板（%s=YYYY-MM-DD HH:mm）
   schedulePast: '执行时间需晚于当前时刻',
   scheduleHint: '选择完整日期与时间后生效',
@@ -39,10 +38,9 @@ export const en: Record<PaeCardKey, string> = {
   feedbackHint: 'Feedback when declining, optional; new independent tasks become new steps',
   discuss: 'Discuss',
   scheduleNow: 'Run now',
-  scheduleTitle: 'Scheduled run time',
+  scheduleClear: 'Clear schedule',
   scheduleDate: 'Date',
   scheduleTime: 'Time',
-  scheduleSet: 'Set schedule',
   scheduleAtHint: 'Scheduled for %s',
   schedulePast: 'Execution time must be later than now',
   scheduleHint: 'Takes effect once a full date and time is selected',
