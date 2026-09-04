@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildSchedulePatch,
   buildSettingsPatch,
   isPlanReviewPending,
   parsePlanDetail,
+  parseScheduleAt,
   questionView,
 } from '../../src/client/review-card.ts'
 
@@ -88,5 +90,41 @@ describe('parsePlanDetail', () => {
       planDir: '/tmp/x',
       steps: [{ file: 'b.md', title: 'a' }],
     })
+  })
+})
+
+describe('parsePlanDetail 排期行', () => {
+  it('detail 含「执行排期」行 → scheduledAt（本地时刻 epoch）', () => {
+    const when = new Date(2026, 8, 5, 9, 30).getTime()
+    const detail = `计划目录：/tmp/x\n执行排期：2026-09-05 09:30\n1. A — a.md`
+    expect(parsePlanDetail(detail)?.scheduledAt).toBe(when)
+  })
+  it('无排期行 → scheduledAt 缺省（立即执行）', () => {
+    expect(parsePlanDetail('计划目录：/tmp/x\n1. A — a.md')?.scheduledAt).toBeUndefined()
+  })
+  it('畸形排期行不打断解析（跳过该行，其余步骤照常）', () => {
+    const detail = `计划目录：/tmp/x\n执行排期：昨天\n1. A — a.md`
+    expect(parsePlanDetail(detail)).toEqual({
+      planDir: '/tmp/x',
+      steps: [{ file: 'a.md', title: 'A' }],
+    })
+  })
+})
+
+describe('parseScheduleAt', () => {
+  it('本地 YYYY-MM-DD HH:mm → epoch', () => {
+    expect(parseScheduleAt('2026-09-05 09:30')).toBe(new Date(2026, 8, 5, 9, 30).getTime())
+  })
+  it('非法 → undefined', () => {
+    expect(parseScheduleAt('x')).toBeUndefined()
+    expect(parseScheduleAt('2026-09-05')).toBeUndefined()
+    expect(parseScheduleAt('2026-13-05 09:30')).toBeUndefined()
+  })
+})
+
+describe('buildSchedulePatch', () => {
+  it('sessionId 键 + {at}', () => {
+    expect(buildSchedulePatch('sess-1', 123)).toEqual({ 'sess-1': { at: 123 } })
+    expect(buildSchedulePatch('sess-1', null)).toEqual({ 'sess-1': { at: null } })
   })
 })

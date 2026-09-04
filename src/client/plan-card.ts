@@ -17,6 +17,8 @@ export interface CardArgs {
     readonly title: string
     readonly requiresConfirmation?: boolean
   }>
+  /** 已排定的执行时刻（epoch ms；回显卡排期回显；首次审批无此行时为 undefined）。 */
+  readonly scheduledAt?: number
 }
 
 /** 下拉选项（provider × model 展平）。 */
