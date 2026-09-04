@@ -188,11 +188,36 @@ export function resumePlanningInstruction(): UserMessage {
   )
 }
 
-/** 审批弹窗的计划清单详情文本（步骤号 + 标题 + 文件 + 确认点标记）。 */
-export function planReviewDetail(steps: readonly PlanStep[], planDir: string): string {
+/** 排期行常量前缀（审批卡 detail 文本协议；client review-card.ts 的 parsePlanDetail 依此解析）。 */
+export const SCHEDULE_LINE_PREFIX = '执行排期：'
+
+/** 补零两位数（formatScheduleAt 内部）。 */
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/**
+ * epoch ms → 本地时区 'YYYY-MM-DD HH:mm'（排期回显行；与 client 解析的本地语义一致）。
+ * @param at - 执行时刻（epoch ms）。
+ * @returns 本地时间文本。
+ */
+export function formatScheduleAt(at: number): string {
+  const d = new Date(at)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+/** 审批弹窗的计划清单详情文本（步骤号 + 标题 + 文件 + 确认点标记；可选排期回显行）。 */
+export function planReviewDetail(
+  steps: readonly PlanStep[],
+  planDir: string,
+  scheduledAt?: number,
+): string {
   const lines = steps.map((step, index) => {
     const mark = step.requiresConfirmation === true ? ' ⚠ 确认点' : ''
     return `${index + 1}. ${step.title} — ${step.file}${mark}`
   })
-  return [`计划目录：${planDir}`, ...lines].join('\n')
+  const head = [`计划目录：${planDir}`]
+  if (scheduledAt !== undefined)
+    head.push(`${SCHEDULE_LINE_PREFIX}${formatScheduleAt(scheduledAt)}`)
+  return [...head, ...lines].join('\n')
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   EXECUTING_SECTION_BODY,
+  formatScheduleAt,
   kickoffInstruction,
   nudgeInstruction,
   planReviewDetail,
@@ -168,5 +169,22 @@ describe('详情渲染', () => {
     )
     expect(detail).toContain('1. A — step-01-a.md')
     expect(detail).toContain('2. B — step-02-b.md ⚠ 确认点')
+  })
+})
+
+describe('排期详情行', () => {
+  it('formatScheduleAt：epoch ms → 本地 YYYY-MM-DD HH:mm', () => {
+    const d = new Date(2026, 8, 4, 23, 5) // 本地 2026-09-04 23:05
+    expect(formatScheduleAt(d.getTime())).toBe('2026-09-04 23:05')
+  })
+  it('planReviewDetail 带排期 → 计划目录行后追加「执行排期」行', () => {
+    const d = new Date(2026, 8, 5, 9, 0)
+    const detail = planReviewDetail([{ file: 'step-01.md', title: 'A' }], '/tmp/x', d.getTime())
+    expect(detail.split('\n')[0]).toBe('计划目录：/tmp/x')
+    expect(detail.split('\n')[1]).toBe('执行排期：2026-09-05 09:00')
+    expect(detail.split('\n')[2]).toBe('1. A — step-01.md')
+  })
+  it('不带排期 → 与现格式逐字节一致（不追加行）', () => {
+    expect(planReviewDetail([{ file: 'a.md', title: 'A' }], '/p')).toBe('计划目录：/p\n1. A — a.md')
   })
 })
