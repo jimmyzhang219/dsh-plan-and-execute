@@ -992,9 +992,10 @@ async function buildScheduledOrchestrator(options: { at: number; nowMs: number }
 
 describe('scheduled 恢复与到点触发', () => {
   it('revive：排期已过 → 自动补执行（不弹卡），run 注入第一步', async () => {
-    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator(
-      { at: 1_999_999_000_000, nowMs: 2_000_000_000_000 }, // nowMs 晚于 scheduledAt
-    )
+    const { orchestrator, agent, scheduler, storage, askControl } =
+      await buildScheduledOrchestrator(
+        { at: 1_999_999_000_000, nowMs: 2_000_000_000_000 }, // nowMs 晚于 scheduledAt
+      )
     await orchestrator.revive()
     await vi.waitFor(() => {
       expect(storage.state?.phase).toBe('executing')
@@ -1044,9 +1045,8 @@ describe('scheduled 恢复与到点触发', () => {
 
   it('revive 回显卡：改为立即批准 → 取消排期并立即执行', async () => {
     const at = 2_000_000_000_000
-    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator(
-      { at, nowMs: at - 60_000 },
-    )
+    const { orchestrator, agent, scheduler, storage, askControl } =
+      await buildScheduledOrchestrator({ at, nowMs: at - 60_000 })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
     await orchestrator.applyPendingSchedule(null) // 用户在回显卡上清为立即执行
@@ -1202,9 +1202,8 @@ describe('scheduled 恢复与到点触发', () => {
 
   it('回显卡驳回（回规划）即清意图：下一次 submitPlan 批准走立即执行（无排期泄漏）', async () => {
     const at = 2_000_000_000_000
-    const { orchestrator, planDir, scheduler, storage, askControl } = await buildScheduledOrchestrator(
-      { at, nowMs: at - 60_000 },
-    )
+    const { orchestrator, planDir, scheduler, storage, askControl } =
+      await buildScheduledOrchestrator({ at, nowMs: at - 60_000 })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
     await orchestrator.applyPendingSchedule(at + 120_000) // 回显卡上先改排期（settings 旁路）

@@ -39,13 +39,15 @@ interface Slot {
 export class ScheduleRegistry {
   private readonly slots = new Map<string, Slot>()
 
-  constructor(private readonly clock: ClockLike = {
-    now: () => Date.now(),
-    setTimer: (fn, ms) => {
-      const handle = setTimeout(fn, ms)
-      return () => clearTimeout(handle)
+  constructor(
+    private readonly clock: ClockLike = {
+      now: () => Date.now(),
+      setTimer: (fn, ms) => {
+        const handle = setTimeout(fn, ms)
+        return () => clearTimeout(handle)
+      },
     },
-  }) {}
+  ) {}
 
   /** 注册/替换某会话的到点触发（同 id 旧排期自动作废）。 */
   arm(sessionId: string, at: number, fire: () => void): void {

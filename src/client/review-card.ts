@@ -79,13 +79,7 @@ export function parseScheduleAt(text: string): number | undefined {
   const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(text.trim())
   if (match === null) return undefined
   const [, year, month, day, hour, minute] = match
-  const date = new Date(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour),
-    Number(minute),
-  )
+  const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute))
   // 构造结果与输入不一致（如 2026-13-05 溢出进位）视为非法
   if (
     date.getFullYear() !== Number(year) ||
