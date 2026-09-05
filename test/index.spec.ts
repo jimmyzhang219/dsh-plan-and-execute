@@ -17,6 +17,8 @@ function fakeCtx() {
     sections: [] as unknown[],
   }
   const listeners: Array<{ event: string; handler: (payload: unknown) => void }> = []
+  /** inject 服务名记录（断言 apply 挂载了可选注入依赖）。 */
+  const injectCalls: string[][] = []
   /** session-title 假服务：默认无标题、rename 记录调用（测试可经 ctx.get 取回改写）。 */
   const sessionTitle = {
     get: vi.fn<(session: unknown) => unknown>(() => undefined),
@@ -45,6 +47,15 @@ function fakeCtx() {
   const ctx = {
     registered,
     listeners,
+    injectCalls,
+    /**
+     * 可选注入服务的宿主假件：默认 undefined（fake 无可用服务时回调收到 ctx、
+     * 属性为 undefined——对应宿主服务未组合的降级）；测试按需改写为假服务。
+     */
+    workspaceRegistry: undefined as { archivedSessionIds: readonly string[] } | undefined,
+    sessionPersistence: undefined as
+      | { list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>> }
+      | undefined,
     sessionTitle,
     llm,
     settings,
@@ -71,7 +82,8 @@ function fakeCtx() {
       listeners.push({ event, handler })
       return () => {}
     },
-    inject: (_services: string[], setup: (child: unknown) => void) => {
+    inject: (services: string[], setup: (child: unknown) => void) => {
+      injectCalls.push(services)
       setup(ctx)
       return () => {}
     },
@@ -807,5 +819,49 @@ describe('定时排期接线', () => {
     // 答案消费后不二次弹卡（等待窗口内无多余 ask）
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(userQuestions.ask).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('归档守卫接线（workspaceRegistry/sessionPersistence 可选注入）', () => {
+  it('默认 fake ctx（两服务属性 undefined）→ 注入闭包降级 undefined，装配照常、命令启动不炸', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    expect(() =>
+      apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
+    ).not.toThrow()
+    // apply 以可选注入挂载两个守卫服务（服务缺失不回调 → 闭包保持 undefined → 判定放行降级）
+    expect(ctx.injectCalls).toContainEqual(['workspaceRegistry'])
+    expect(ctx.injectCalls).toContainEqual(['sessionPersistence'])
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    await expect(handler({ agent: fakeAgent('none'), rawInput: '做点事' })).resolves.toMatchObject({
+      kind: 'success',
+    })
+    expect(ctx.logger.warn).not.toHaveBeenCalled()
+  })
+
+  it('提供 workspaceRegistry/sessionPersistence 假服务 → 注入闭包读取生效、装配不抛，scheduled revive 路径照旧', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    // 注入回调收到的 ctx 带两服务属性（归档判定/冷落盘读取面；到点 fire 不可达，
+    // 决策与作废行为由 archive-guard.spec + orchestrator.spec 覆盖，此处仅验接线不炸）
+    ctx.workspaceRegistry = { archivedSessionIds: ['sess-1'] }
+    ctx.sessionPersistence = {
+      list: vi.fn(async () => [{ id: 'sess-1', cwd }]),
+    }
+    expect(() =>
+      apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
+    ).not.toThrow()
+    await seedState('scheduled', {
+      scheduledAt: Date.now() + 60_000,
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    await writeFile(join(cwd, '.pae', 'sess-1', 'a.md'), '# A\n内容', 'utf8')
+    const agent = fakeAgent('none')
+    await fireCreated(ctx, agent)
+    // revive 的 scheduled 分支照旧复弹 plan-review ask（必经 userQuestions 服务）
+    expect(ctx.get).toHaveBeenCalledWith('userQuestions')
+    expect(ctx.logger.warn).not.toHaveBeenCalled()
   })
 })

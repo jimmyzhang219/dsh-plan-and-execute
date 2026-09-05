@@ -1396,3 +1396,118 @@ describe('scheduled 恢复与到点触发', () => {
     expect(scheduler.arm).toHaveBeenCalledTimes(1) // 未对任何排期二次 arm
   })
 })
+
+describe('voidScheduledByArchive（归档作废排期）', () => {
+  it("scheduled（revive 加载、无悬空卡）→ 'cancelled'：终态 aborted、scheduledAt/stepIndex 清、plan 保留、cancel 被调、无 todo/注入", async () => {
+    const at = 2_000_000_000_000
+    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator({
+      at,
+      nowMs: at - 60_000,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+    askControl.resolveNext(answer('pae-approve', '批准')) // 批准未改排期 → kept：保持等待、无悬空卡
+    await revivePromise
+    expect(storage.state?.phase).toBe('scheduled')
+
+    expect(await orchestrator.voidScheduledByArchive()).toBe('cancelled')
+    expect(storage.state?.phase).toBe('aborted')
+    expect(storage.state?.scheduledAt).toBeUndefined()
+    expect(storage.state?.stepIndex).toBeUndefined()
+    expect(storage.state?.plan).toBeDefined() // 终态保留 plan 供查看
+    expect(scheduler.cancel).toHaveBeenCalledTimes(1) // kept 不 cancel、仅本次作废取消
+    expect(scheduler.arm).toHaveBeenCalledTimes(1) // 仅 revive 前置 arm，未重 arm
+    expect(agent.session.todosWrites).toHaveLength(0) // 作废不写宿主 todo
+    expect(agent.steered).toHaveLength(0) // 不注入任何消息
+  })
+
+  it("executing / paused / planning / completed → 'ignored' 且无副作用", async () => {
+    // executing：批准即执行中（makeOrchestrator 默认批准路径）
+    const scheduler1 = fakeScheduler()
+    const { orchestrator: execOrch, storage: execStorage } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+      {},
+      undefined,
+      undefined,
+      { scheduler: scheduler1 },
+    )
+    expect(execOrch.snapshot().phase).toBe('executing')
+    expect(await execOrch.voidScheduledByArchive()).toBe('ignored')
+    expect(execStorage.state?.phase).toBe('executing')
+    expect(scheduler1.cancel).not.toHaveBeenCalled()
+
+    // paused：revive 恢复的暂停态（恢复弹窗挂起中）
+    const revived = new FakeRevivedSession()
+    revived.storage.state = { ...revived.storage.state!, phase: 'paused', pausedReason: 'failure' }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const pausedOrch = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    const revivePromise = pausedOrch.revive()
+    await vi.waitFor(() => expect(revived.receivedQuestions.length).toBe(1))
+    expect(await pausedOrch.voidScheduledByArchive()).toBe('ignored')
+    expect(revived.storage.state?.phase).toBe('paused') // 未被打断
+    revived.resolveResume(answer('pae-pause', '终止'))
+    await revivePromise
+
+    // planning：仅 begin（尚未批准）
+    const planDir = await mkdtemp(join(tmpdir(), 'pae-void-planning-'))
+    tempDirs.push(planDir)
+    const planningStorage = new FakeStorage()
+    const planningOrch = new Orchestrator({
+      agent: new FakeAgent(),
+      ask: fakeAsk().ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir,
+      storage: planningStorage,
+    })
+    await planningOrch.begin('T')
+    expect(await planningOrch.voidScheduledByArchive()).toBe('ignored')
+    expect(planningStorage.state?.phase).toBe('planning')
+
+    // completed：终态直接忽略
+    const revivedDone = new FakeRevivedSession()
+    revivedDone.storage.state = { ...revivedDone.storage.state!, phase: 'completed' }
+    const doneOrch = new Orchestrator({
+      agent: revivedDone.agent,
+      ask: revivedDone.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revivedDone.planDir,
+      storage: revivedDone.storage,
+    })
+    await doneOrch.revive()
+    expect(await doneOrch.voidScheduledByArchive()).toBe('ignored')
+    expect(revivedDone.storage.state?.phase).toBe('completed')
+  })
+
+  it('悬空常驻卡挂起中归档作废 → abort 后卡答案折叠（不续卡、不执行、无脏写）', async () => {
+    const at = 2_000_000_000_000
+    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator({
+      at,
+      nowMs: at - 60_000,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1)) // 常驻卡挂起
+
+    expect(await orchestrator.voidScheduledByArchive()).toBe('cancelled')
+    expect(storage.state?.phase).toBe('aborted')
+    expect(scheduler.cancel).toHaveBeenCalled()
+
+    // 卡答案在 abort 前已 resolve 入队仍会投递：phase 已迁出 scheduled → 复检折叠，作废意图不生效
+    askControl.resolveNext(answer('pae-approve', '批准', 'paeSchedule:now'))
+    await revivePromise
+    await new Promise((resolve) => setTimeout(resolve, 150)) // 留窗口：若折叠缺失，now 意图会改 executing 并注入指令
+    expect(askControl.receivedQuestions).toHaveLength(1) // 未再弹卡
+    expect(storage.state?.phase).toBe('aborted')
+    expect(storage.state?.scheduledAt).toBeUndefined()
+    expect(agent.steered).toHaveLength(0)
+    expect(agent.session.todosWrites).toHaveLength(0)
+    expect(scheduler.arm).toHaveBeenCalledTimes(1) // 仅 revive 前置 arm，未被作废的答案重 arm
+    expect(scheduler.cancel).toHaveBeenCalledTimes(1)
+  })
+})

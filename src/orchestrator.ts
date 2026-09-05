@@ -1047,6 +1047,29 @@ export class Orchestrator {
     return true
   }
 
+  /**
+   * 到点触发时发现会话已被归档：作废等待期排期（终态 aborted，不执行不补跑）。
+   * 仅 phase==='scheduled'（且 plan/scheduledAt 齐备）时生效——
+   * executing/paused/终态/planning 均忽略（正在执行不受归档影响，用户在场自主决定）。
+   * 与 finish('aborted') 对齐的收尾差异：aborted 不重写宿主 todo、不注入任何消息，
+   * 仅保留 plan/stepReports 供查看；终态经 save 落盘（失败照 fail-loud 上抛，调用方 catch）。
+   * @returns 'cancelled'=已作废；'ignored'=状态不适用。
+   */
+  async voidScheduledByArchive(): Promise<'cancelled' | 'ignored'> {
+    const plan = this.state.plan
+    const at = this.state.scheduledAt
+    if (this.state.phase !== 'scheduled' || plan === undefined || at === undefined) return 'ignored'
+    this.deps.scheduler?.cancel()
+    // 撤销悬空常驻卡：pending ask 折叠 dismissed，随后 present 守卫（phase 已迁出
+    // scheduled）自然不再续卡，卡答案即使晚到也经 F-2 复检作废
+    this.currentAskAbort?.abort()
+    this.state.scheduledAt = undefined
+    this.state.stepIndex = undefined
+    this.state.phase = 'aborted'
+    await this.save()
+    return 'cancelled'
+  }
+
   /** 加载持久化快照到内存（resume 路径）。 */
   private applyPersisted(persisted: PersistedOrchestratorState): void {
     this.state.phase = persisted.phase

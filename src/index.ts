@@ -22,6 +22,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-settings'
 // Type-only：todo/write 事件的 SessionEventMap 合并声明由 dsh-tool-todo 拥有。
 import type {} from '@deepseek-ai/dsh-tool-todo'
+import { decideScheduledFire, voidColdArchivedSession } from './archive-guard.ts'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
 import { fileStorage } from './persist.ts'
 import { ScheduleRegistry } from './schedule.ts'
@@ -105,6 +106,30 @@ export function apply(ctx: Context, config: Config): void {
   const orchestrators = new WeakMap<object, Orchestrator>()
   /** sessionId → 编排器（settings/updated 桥接按载荷中的 sessionId 定位）。 */
   const bySessionId = new Map<string, Orchestrator>()
+
+  // —— 归档守卫：可选注入闭包引用（settings 同款体例：ctx.inject 等服务可用才回调；
+  // 服务缺失时闭包保持 undefined——归档判定降级为放行，冷落盘降级为 warn）——
+  // workspaceRegistry/sessionPersistence 的 Context 合并声明属宿主包（非本工程
+  // 依赖），此处经 as unknown as 读属性；形状按宿主公开面（archivedSessionIds
+  // 持久集合 / sessionPersistence.list → header { id, cwd }）窄化。
+  /** workspaceRegistry 服务引用（到点触发前查归档；undefined=服务缺失）。 */
+  let workspaceRegistry: { archivedSessionIds: readonly string[] } | undefined
+  ctx.inject(['workspaceRegistry'], (wsCtx) => {
+    workspaceRegistry = (
+      wsCtx as unknown as { workspaceRegistry?: { archivedSessionIds: readonly string[] } }
+    ).workspaceRegistry
+  })
+  /** sessionPersistence 服务引用（冷归档会话按 header cwd 定位排期文件；undefined=服务缺失）。 */
+  let sessionPersistence: {
+    list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>>
+  } | undefined
+  ctx.inject(['sessionPersistence'], (persistenceCtx) => {
+    sessionPersistence = (
+      persistenceCtx as unknown as {
+        sessionPersistence?: { list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>> }
+      }
+    ).sessionPersistence
+  })
 
   /** 会话计划目录：<会话 cwd>/<planDir>/<sessionId>。 */
   const planDirOf = (agent: Agent): string => {
@@ -243,18 +268,52 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * 排期到点：编排器在场则直接触发执行；不在场（冷会话）经 ctx.get('agents')?.resume
-   * 恢复会话 → agent/created → revive() 的 scheduled 分支自动补执行。
-   * resume 依赖部署具备 agents/sessionPersistence 服务；失败仅记日志，
-   * 等会话被打开时按 overdue 补执行（与宿主 schedule 同语义）。
+   * 排期到点：先查会话归档态（workspaceRegistry 可选注入；服务缺失视为未归档放行）。
+   * 已归档 → 排期作废（不执行、不补跑）：live 会话经编排器 voidScheduledByArchive
+   * 落终态 aborted；冷会话（进程重启后未打开、无编排器实例）经
+   * voidColdArchivedSession 按持久化 header cwd 定位排期文件落终态（无法定位仅记
+   * warn 遗留——取消归档重开会话仍按 overdue 补执行，残余窗口见该函数注释）。
+   * 未归档 → 原逻辑：编排器在场直接触发 fireScheduledRun；不在场经
+   * ctx.get('agents')?.resume 恢复会话 → agent/created → revive() 的 scheduled
+   * 分支自动补执行。resume 依赖部署具备 agents/sessionPersistence 服务；失败仅记
+   * 日志，等会话被打开时按 overdue 补执行（与宿主 schedule 同语义）。
    */
   const fireScheduledSession = (sessionId: string): void => {
-    const orchestrator = bySessionId.get(sessionId)
-    if (orchestrator !== undefined) {
-      void orchestrator.fireScheduledRun()
-      return
-    }
     void (async () => {
+      const orchestrator = bySessionId.get(sessionId)
+      if (
+        decideScheduledFire(workspaceRegistry?.archivedSessionIds, sessionId) === 'void-by-archive'
+      ) {
+        if (orchestrator !== undefined) {
+          // 落盘失败（fail-loud 上抛）在此接住记 warn：内存态已置 aborted，
+          // 持久化旧态留待重开/重启时由 revive 按 scheduled 兜底
+          await orchestrator.voidScheduledByArchive().catch((error) => {
+            ctx.logger.warn(
+              `dsh-plan-and-execute: 归档会话 ${sessionId} 排期作废落盘失败：${String(error)}`,
+            )
+          })
+          return
+        }
+        // 冷会话：无编排器实例可作废，尝试按持久化 header cwd 落终态（幂等无害）
+        const persistence = sessionPersistence
+        await voidColdArchivedSession(
+          {
+            planRoot: config.planDir,
+            warn: (message) => ctx.logger.warn(`dsh-plan-and-execute: ${message}`),
+            ...(persistence === undefined ? {} : { listHeaders: () => persistence.list() }),
+          },
+          sessionId,
+        ).catch((error) => {
+          ctx.logger.warn(
+            `dsh-plan-and-execute: 归档会话 ${sessionId} 排期作废失败：${String(error)}`,
+          )
+        })
+        return
+      }
+      if (orchestrator !== undefined) {
+        void orchestrator.fireScheduledRun()
+        return
+      }
       const agents = ctx.get('agents') as
         { resume(options: { resumeSessionId: string }): Promise<unknown> } | undefined
       if (agents === undefined) {
