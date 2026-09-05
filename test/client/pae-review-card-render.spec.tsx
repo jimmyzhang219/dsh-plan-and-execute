@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   PaeReviewCard,
   PaeReviewCardView,
@@ -220,8 +220,23 @@ describe('执行时间控件', () => {
     await waitFor(() => expect(statusText()).toMatch(/晚于当前/))
     expect(commitBtn().disabled).toBe(true)
     expect(update).not.toHaveBeenCalled()
-    // 校验反馈只在浮层状态行：卡底 .pae-error（role=status）不再承担排期校验文案
-    expect(screen.getByRole('status').textContent).toBe('')
+    // 校验反馈只在浮层状态行（role=status 播报 past 文案）；卡底 .pae-error 保持空串（无双写）。
+    // DOM 顺序：header 内浮层状态行在前，卡底 .pae-error 在后。
+    expect(screen.getAllByRole('status').map((el) => el.textContent)).toEqual([
+      '执行时间需晚于当前时刻',
+      '',
+    ])
+  })
+
+  it('过去时间输入后浮层状态行以 role=status 可被辅助技术感知（aria-live 播报入口）', async () => {
+    openPicker()
+    fillParts(new Date(Date.now() - 60_000))
+    // within(picker) 定位，避免与卡底 .pae-error 的 role=status 混淆
+    await waitFor(() =>
+      expect(within(screen.getByTestId('schedule-picker')).getByRole('status').textContent).toMatch(
+        /晚于当前/,
+      ),
+    )
   })
 
   it('浮层点「立即执行」→ settings.update(PAE_SCHEDULE_NS, {at: null}) 并关闭浮层', async () => {

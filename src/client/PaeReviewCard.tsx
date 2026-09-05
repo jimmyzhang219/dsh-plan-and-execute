@@ -283,10 +283,14 @@ export function PaeReviewCard({
                       onChange={(e) => setTimePart(e.target.value)}
                     />
                   </label>
-                  {/* 草稿即时反馈状态行（取代卡底 .pae-error 承担排期校验文案） */}
+                  {/* 草稿即时反馈状态行（取代卡底 .pae-error 承担排期校验文案）；
+                      role=status + aria-live：非法输入对屏幕阅读器即时播报（空文案不播报，
+                      与卡底 .pae-error 的 role=status 并存无冲突） */}
                   <div
                     className={`pae-schedule-status${draftStatusMod}`}
                     data-testid="schedule-status"
+                    role="status"
+                    aria-live="polite"
                   >
                     {draftStatusText}
                   </div>
