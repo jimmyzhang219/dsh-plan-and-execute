@@ -39,6 +39,9 @@ export default defineConfig([
     sourcemap: true,
     clean: false,
     external: CLIENT_EXTERNALS,
+    // 第三方 UI 依赖须打进 bundle：tsup 默认把 package.json 的 dependencies 也标
+    // external（浏览器模块表缺失即崩，assert-client-wrapper 断言非种子词 require 为零）。
+    noExternal: ['react-day-picker'],
     outExtension: () => ({ js: '.js' }),
     // dsh client 模块系统契约：包自身调用 window.__ModuleLoader__.load({id, factory})
     // 注册（宿主只 serve 原始字节，不注入包装；对齐 dsh 官方 tsdown.client.ts banner）。
