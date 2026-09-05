@@ -29,7 +29,7 @@ import { DayPicker } from 'react-day-picker'
 import type { CaptionLabelProps, WeekdayProps } from 'react-day-picker'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import { flattenCatalog, optionKey } from './plan-card.ts'
-import { PAE_MODELS_NS, PAE_PING_NS } from '../state.ts'
+import { PAE_MODELS_NS } from '../state.ts'
 import {
   buildSettingsPatch,
   encodeApprovalSchedule,
@@ -42,18 +42,6 @@ import {
   type PickerPlacement,
 } from './review-card.ts'
 import { zh as zhTexts, type NS } from './locale.ts'
-
-/** 会话查看脉冲限频间隔：同一会话 10s 内至多发一次（空闲无渲染则天然不重发）。 */
-const PING_INTERVAL_MS = 10_000
-/** 已发 ping 的会话 → 上次发送时刻（module 级去重限频；页面生命周期内存，刷新即空）。 */
-const pingedAt = new Map<string, number>()
-
-/**
- * 清空 ping 限频缓存（仅供测试：render spec 用例间隔离模块态；生产无调用方）。
- */
-export function resetPingCache(): void {
-  pingedAt.clear()
-}
 
 /** 中文星期单字（数组下标 = Date.getDay()：0=周日 → 「日」…6=周六 → 「六」）。 */
 const ZH_WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
@@ -746,26 +734,9 @@ export function PaeReviewCardView({
     }
   }, [sessionRemote])
 
-  // —— 会话查看脉冲：composer 链每次会话打开/刷新都会重挂载本 selector（含无
-  // pending 返回 null 时）——hooks 必须在本文件 isPlanReviewPending 早退之前执行。
-  // 以新 sessionKey 挂载即发一次 pae-ping（模块级 10s 限频）；宿主桥接后编排器
-  // 仅在 scheduled 等待期重弹回显卡，executing/paused 保持不显示。
-  const fallbackSessionId = (pendingInteraction as { sessionId?: unknown } | null | undefined)
-    ?.sessionId
-  const sessionKey = sessionId ?? (typeof fallbackSessionId === 'string' ? fallbackSessionId : '')
-  useEffect(() => {
-    if (sessionKey === '') return
-    const last = pingedAt.get(sessionKey) ?? 0
-    if (Date.now() - last < PING_INTERVAL_MS) return
-    pingedAt.set(sessionKey, Date.now())
-    void settingsRemote
-      .update(PAE_PING_NS, { [sessionKey]: { t: Date.now() } }, undefined)
-      .catch(() => {
-        // 装配/连接故障：静默（无此信号仅失去自动重弹）
-      })
-  }, [sessionKey, settingsRemote])
-
-  // owner props 的 pendingInteraction 与 selector 的 matched 同值；结构判定不过则不接管
+  // owner props 的 pendingInteraction 与 selector 的 matched 同值；结构判定不过则不接管。
+  // （会话打开 pae-ping 已移至注册入口 select：视图仅在结构命中时挂载，刷新无 pending
+  // 时不挂载、effect 永不执行——select 每次链求值都跑，才是无死角的发送点。）
   if (!isPlanReviewPending(pendingInteraction)) return null
   const pending = pendingInteraction
   const review = questionView(pending.questions)

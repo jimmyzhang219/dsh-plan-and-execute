@@ -14,8 +14,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { en, NS, zh } from './locale.ts'
+import { allowSessionPing } from './ping.ts'
 import './styles.ts' // 副作用：按 claimStyles 契约注入审批卡样式（模块顶层执行）
 import { isPlanReviewPending } from './review-card.ts'
+import { PAE_PING_NS } from '../state.ts'
 import { PaeReviewCardView, type PaeReviewCardInjected } from './PaeReviewCard.tsx'
 
 /** 插件名（与宿主 half 同名，供模块表路由）。 */
@@ -41,8 +43,26 @@ export function apply(ctx: Context): void {
       {
         name: 'conversation.composer',
         priority: -1,
-        select: ({ pendingInteraction }: { pendingInteraction: unknown }) =>
-          isPlanReviewPending(pendingInteraction) ? pendingInteraction : null,
+        select: ({
+          sessionId,
+          pendingInteraction,
+        }: {
+          sessionId?: string
+          pendingInteraction: unknown
+        }) => {
+          const sid = sessionId ?? ''
+          // 会话打开信号：本卡无持久化状态通道，宿主靠 pae-ping 脉冲得知「会话正被查看」，
+          // 以便 scheduled 等待期重弹回显卡。select 每次链求值都执行（含无 pending），
+          // 限频防同一会话持续渲染风暴（空闲无渲染则天然不重发）。
+          if (sid !== '' && allowSessionPing(sid, Date.now())) {
+            void ctx.remote.settings
+              .update(PAE_PING_NS, { [sid]: { t: Date.now() } }, undefined)
+              .catch(() => {
+                // 装配/连接故障：静默（缺信号仅失去自动重弹，不阻塞其他功能）
+              })
+          }
+          return isPlanReviewPending(pendingInteraction) ? pendingInteraction : null
+        },
         locale: NS,
         inject: (): PaeReviewCardInjected => ({
           sessionRemote: ctx.remote.session,

@@ -4,18 +4,16 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import {
   PaeReviewCard,
   PaeReviewCardView,
-  resetPingCache,
   type PaeReviewCardProps,
 } from '../../src/client/PaeReviewCard.tsx'
 import { nextFullHour } from '../../src/client/review-card.ts'
-import { PAE_MODELS_NS, PAE_PING_NS } from '../../src/state.ts'
+import { PAE_MODELS_NS } from '../../src/state.ts'
 import { zh } from '../../src/client/locale.ts'
 
 // vitest 未开 globals：显式 cleanup 避免跨用例 DOM 累积（与 plan-card-render.spec.tsx 一致）。
-// ping 限频 map 为模块态（页面生命周期内存）：用例间清理保持确定性；假 Date 一律还原。
+// 时间控件用例用假 Date，一律还原。
 afterEach(() => {
   cleanup()
-  resetPingCache()
   vi.useRealTimers()
 })
 
@@ -553,48 +551,5 @@ describe('PaeReviewCardView', () => {
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'approve' })).toBeTruthy())
     expect(screen.queryByRole('button', { name: /openStep/ })).toBeNull()
-  })
-
-  describe('会话查看脉冲（client ping）', () => {
-    it('打开会话（无 pending）→ 发一次 pae-ping settings.update；同 session 限频内不重发；异 session 各自发送；窗口过后再发', async () => {
-      resetPingCache()
-      const updateSpy = viewInject.settingsRemote.update
-      updateSpy.mockClear() // 本用例内以绝对次数断言：先清历史
-      const t0 = 1_700_000_000_000
-      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0)
-      // update spy 无入参声明 → mock.calls 元素为 [] 元组，先放宽为 unknown[] 再筛 ns
-      const pingCalls = (): unknown[][] =>
-        (updateSpy.mock.calls as unknown[][]).filter((call) => call[0] === PAE_PING_NS)
-      /** 挂载 PaeReviewCardView（无 pending → selector 返回 null，effect 仍照跑）。 */
-      const mountView = (session: string): ReturnType<typeof render> =>
-        render(
-          <PaeReviewCardView
-            sessionId={session}
-            pendingInteraction={{ kind: 'question', key: 'k' }} // 结构判定不过 → 无卡
-            t={(key: string) => key}
-            {...viewInject}
-          />,
-        )
-      const first = mountView('sess-1')
-      expect(first.container.firstChild).toBeNull() // 无 pending 不渲染卡片
-      await waitFor(() => expect(pingCalls()).toHaveLength(1))
-      expect(pingCalls()[0]).toEqual([PAE_PING_NS, { 'sess-1': { t: t0 } }, undefined])
-      // 同 session 重新挂载（10s 限频窗口内）→ 不重发
-      first.unmount()
-      mountView('sess-1')
-      expect(pingCalls()).toHaveLength(1)
-      // 异 session → 各自独立发送
-      const second = mountView('sess-2')
-      await waitFor(() => expect(pingCalls()).toHaveLength(2))
-      expect(pingCalls()[1]).toEqual([PAE_PING_NS, { 'sess-2': { t: t0 } }, undefined])
-      second.unmount()
-      // 限频窗口（10s）过后同 session 再次挂载 → 重发
-      nowSpy.mockReturnValue(t0 + 10_001)
-      const third = mountView('sess-1')
-      await waitFor(() => expect(pingCalls()).toHaveLength(3))
-      expect(pingCalls()[2]).toEqual([PAE_PING_NS, { 'sess-1': { t: t0 + 10_001 } }, undefined])
-      third.unmount()
-      nowSpy.mockRestore()
-    })
   })
 })
