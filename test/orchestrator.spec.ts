@@ -876,25 +876,73 @@ describe('消息隔离（surface 锚定）', () => {
 })
 
 describe('批准时定时执行', () => {
-  it('批准载荷带未来 at → phase=scheduled + scheduledAt 持久化 + scheduler.arm(at)，不启动 run', async () => {
-    const scheduler = fakeScheduler()
+  it('提交排期批准 → 等待期不写宿主 todo，常驻回显卡随后出现；意图不变再批准 → 不续卡防自旋', async () => {
     const at = 1_700_000_060_000
-    const { agent, storage, verdict } = await makeOrchestrator(
-      [{ file: 'a.md', title: 'A' }],
-      [answer('pae-approve', '批准', `paeSchedule:at:${at}`)],
-      {},
-      undefined,
-      undefined,
-      { scheduler, now: () => 1_700_000_000_000 }, // 固定“当前时刻”，at 相对其 +60s
-    )
+    const { agent, scheduler, storage, askControl, submitPromise } = await buildScheduledSubmit({
+      at,
+      nowMs: at - 60_000,
+    })
+    // 审批卡（首卡）批准载荷带未来 at → phase=scheduled + scheduledAt 持久化 + arm(at)
+    askControl.resolveNext(answer('pae-approve', '批准', `paeSchedule:at:${at}`))
+    const verdict = await submitPromise
     expect(verdict).toEqual({ approved: true })
     expect(storage.state?.phase).toBe('scheduled')
     expect(storage.state?.scheduledAt).toBe(at)
     expect(scheduler.arm).toHaveBeenCalledWith(at)
+    // 等待期（scheduled 阶段）不写宿主 todo 卡：批准后零次 todo/write
+    expect(agent.session.todosWrites).toHaveLength(0)
     // 未启动 run：除 kickoff 外没有步骤指令注入
-    await vi.waitFor(() => {
-      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    // 常驻回显卡：批准后同一流程弹第二次 plan-review ask（detail 含执行排期行）
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2))
+    const persistent = askControl.receivedQuestions[1]![0]!
+    expect(persistent.intent).toEqual({ kind: 'plan-review', approve: '批准' })
+    expect(persistent.detail).toContain('执行排期：')
+    // 意图不变（无排期编码）再批准 → 不续卡（防自旋）：保持排期等待、无第三张卡
+    askControl.resolveNext(answer('pae-approve', '批准'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(askControl.receivedQuestions).toHaveLength(2)
+    expect(storage.state?.phase).toBe('scheduled')
+    expect(storage.state?.scheduledAt).toBe(at)
+    expect(scheduler.arm).toHaveBeenCalledTimes(1) // kept 不重 arm
+    expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    expect(agent.session.todosWrites).toHaveLength(0)
+  })
+
+  it('常驻卡改「立即执行」→ 取消排期转 executing：写 all-pending todo 并启动 run', async () => {
+    const at = 1_700_000_060_000
+    const { agent, scheduler, storage, askControl, submitPromise } = await buildScheduledSubmit({
+      at,
+      nowMs: at - 60_000,
     })
+    askControl.resolveNext(answer('pae-approve', '批准', `paeSchedule:at:${at}`))
+    await submitPromise
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2)) // 常驻卡挂起
+    askControl.resolveNext(answer('pae-approve', '批准', 'paeSchedule:now'))
+    await vi.waitFor(() => expect(storage.state?.phase).toBe('executing'))
+    expect(storage.state?.scheduledAt).toBeUndefined()
+    expect(scheduler.cancel).toHaveBeenCalled()
+    // 转 executing 即写宿主 todo：all-pending 快照 → run 首步 mark(in_progress)
+    await vi.waitFor(() => {
+      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(2)
+    })
+    expect(agent.session.todosWrites[0]).toEqual([{ content: '1. A', status: 'pending' }])
+    expect(agent.session.todosWrites.at(-1)).toEqual([{ content: '1. A', status: 'in_progress' }])
+  })
+
+  it('常驻卡「继续修改」→ 取消排期回规划阶段', async () => {
+    const at = 1_700_000_060_000
+    const { scheduler, storage, askControl, submitPromise } = await buildScheduledSubmit({
+      at,
+      nowMs: at - 60_000,
+    })
+    askControl.resolveNext(answer('pae-approve', '批准', `paeSchedule:at:${at}`))
+    await submitPromise
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2)) // 常驻卡挂起
+    askControl.resolveNext(answer('pae-approve', '继续修改'))
+    await vi.waitFor(() => expect(storage.state?.phase).toBe('planning'))
+    expect(storage.state?.scheduledAt).toBeUndefined()
+    expect(scheduler.cancel).toHaveBeenCalled()
   })
 
   it('无 custom 批准 → 立即执行（首卡默认），且 scheduler.cancel 未被调用', async () => {
@@ -982,6 +1030,35 @@ async function buildScheduledOrchestrator(options: { at: number; nowMs: number }
   return { orchestrator, agent, scheduler, storage, askControl, planDir: dir }
 }
 
+/**
+ * 构造「提交带排期批准」的编排器：审批卡挂起，批准载荷由测试 resolveNext 提供；
+ * 批准走 scheduled 分支后，常驻回显卡（第二次 ask）同样由测试逐张 resolve。
+ */
+async function buildScheduledSubmit(options: { at: number; nowMs: number }) {
+  const dir = await mkdtemp(join(tmpdir(), 'pae-sched-submit-'))
+  tempDirs.push(dir)
+  const { Orchestrator } = await import('../src/orchestrator.ts')
+  const agent = new FakeAgent()
+  const scheduler = fakeScheduler()
+  const storage = new FakeStorage()
+  const askControl = manualAsk()
+  const orchestrator = new Orchestrator({
+    agent,
+    ask: askControl.ask,
+    storage,
+    scheduler,
+    now: () => options.nowMs,
+    config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+    planDir: dir,
+  })
+  await orchestrator.begin('定时执行')
+  await writeFile(join(dir, 'a.md'), '# A\n内容', 'utf8')
+  // 提交计划：审批卡（首卡）挂起，等待测试给出批准载荷
+  const submitPromise = orchestrator.submitPlan(dir, [{ file: 'a.md', title: 'A' }], 'S')
+  await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+  return { orchestrator, agent, scheduler, storage, askControl, submitPromise }
+}
+
 describe('scheduled 恢复与到点触发', () => {
   it('revive：排期已过 → 自动补执行（不弹卡），run 注入第一步', async () => {
     const { orchestrator, agent, scheduler, storage, askControl } =
@@ -1016,9 +1093,13 @@ describe('scheduled 恢复与到点触发', () => {
     expect(storage.state?.phase).toBe('scheduled')
     expect(storage.state?.scheduledAt).toBe(at) // 原排期保持
     expect(scheduler.arm).toHaveBeenCalledWith(at)
+    // 意图不变（无编码）→ kept：不续卡（防自旋）、不重 arm
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(askControl.receivedQuestions).toHaveLength(1)
+    expect(scheduler.arm).toHaveBeenCalledTimes(1)
   })
 
-  it('revive 回显卡：批准载荷带新 at → 替换排期（scheduledAt 更新 + arm 新时刻）', async () => {
+  it('revive 回显卡：批准载荷带新 at → 替换排期 + 常驻续卡（按新时刻弹第二张卡）', async () => {
     const oldAt = 2_000_000_000_000
     const newAt = 2_000_000_060_000
     const { orchestrator, scheduler, storage, askControl } = await buildScheduledOrchestrator({
@@ -1028,10 +1109,14 @@ describe('scheduled 恢复与到点触发', () => {
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
     askControl.resolveNext(answer('pae-approve', '批准', `paeSchedule:at:${newAt}`))
+    // 意图变更（新时刻）→ 常驻续卡：第二张回显卡按新排期弹（挂起等待测试消费）
+    await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2))
+    askControl.resolveNext(answer('pae-approve', '批准')) // 续卡上意图不变 → kept 收尾
     await revivePromise
     expect(storage.state?.phase).toBe('scheduled')
     expect(storage.state?.scheduledAt).toBe(newAt)
     expect(scheduler.arm).toHaveBeenLastCalledWith(newAt)
+    expect(scheduler.arm).toHaveBeenCalledTimes(2) // revive 前置 arm(oldAt) + 变更重 arm(newAt)
   })
 
   it('revive 回显卡：批准载荷 now → 取消排期并立即执行', async () => {
@@ -1209,6 +1294,8 @@ describe('scheduled 恢复与到点触发', () => {
       expect(question.detail).toContain('执行排期：')
       expect(scheduler.arm).toHaveBeenLastCalledWith(at) // 重 arm（幂等替换）
       askControl.resolveNext(answer('pae-approve', '批准')) // 收尾：保持原排期
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(askControl.receivedQuestions).toHaveLength(2) // 意图不变 → 不续第三张卡
       expect(storage.state?.phase).toBe('scheduled')
       expect(storage.state?.scheduledAt).toBe(at)
     })

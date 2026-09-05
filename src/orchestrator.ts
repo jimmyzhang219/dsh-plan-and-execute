@@ -363,6 +363,8 @@ export class Orchestrator {
       ],
       this.currentAskAbort.signal,
     )
+    // 审批卡已消费：清句柄（排期常驻卡守卫要求 currentAskAbort===undefined 才弹新卡）
+    this.currentAskAbort = undefined
     if (answer === 'dismissed') {
       return { approved: false, error: '用户暂时搁置了审批。留在规划阶段，等待用户下一条消息。' }
     }
@@ -399,9 +401,13 @@ export class Orchestrator {
       this.state.stepIndex = undefined
       this.state.scheduledAt = dec.at
       await this.save()
-      this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+      // 等待期（scheduled 阶段）不写宿主 todo 卡：todo 面板待真正开始执行（fire /
+      // afterScheduledCardChoice 'now' / 立即分支）时才出现
       this.deps.scheduler?.arm(dec.at)
       this.approval?.resolve(plan)
+      // 常驻回显卡：resolve 之后同一同步段发起（afterApproval 见 scheduled 早退不启动 run；
+      // 弹卡前守卫保证至多一张——到点 fireScheduledRun 先 abort 悬空卡再执行）
+      void this.runScheduledCardLoop(plan, dec.at)
       return { approved: true }
     }
     // 立即执行（现状路径；指定时刻已滑过亦降级至此）
@@ -769,11 +775,28 @@ export class Orchestrator {
     return 'continue'
   }
 
-  /** 复弹 plan-review 审批卡（scheduled 回显卡）。返回：'re-approve'=保持/已替换排期；'now'=改为立即执行；'replan'=取消排期回规划；'dismissed'=卡关闭保持原排期。 */
-  private async askScheduledReview(
+  /**
+   * 弹一张排期回显卡（常驻卡/恢复重弹共用）：守卫（即 fire 竞态复检 F-2 的第一道）通过后
+   * 才 ask plan-review 三态卡并消费选择。守卫：非 scheduled / at 与 scheduledAt 不符
+   * （fire/now 已迁出清掉）/ 已有悬空卡（至多一张卡不变量）→ 不弹，直接返回 'dismissed'。
+   * @param plan - 已批准的计划（detail 展示用）。
+   * @param at - 弹卡展示的排期时刻（须等于 state.scheduledAt 守卫才通过）。
+   * @returns 用户选择：'re-approve-changed'=批准且携带新排期（内部已更新 scheduledAt 并重 arm，
+   *   调用方据意图变更续弹常驻卡）；'re-approve-kept'=批准未改排期（不续卡防自旋）；
+   *   'now'=改立即执行；'replan'=取消排期回规划（继续修改）；'dismissed'=卡被关闭/守卫失败（保持等待）。
+   */
+  private async presentScheduledCard(
     plan: PaePlanPayload,
     at: number,
-  ): Promise<'re-approve' | 'replan' | 'now' | 'dismissed'> {
+  ): Promise<'re-approve-changed' | 're-approve-kept' | 'now' | 'replan' | 'dismissed'> {
+    if (
+      this.state.phase !== 'scheduled' ||
+      at !== this.state.scheduledAt ||
+      this.currentAskAbort !== undefined
+    ) {
+      return 'dismissed'
+    }
+    console.log(`[pae-debug] presentScheduledCard at=${formatScheduleAt(at)} phase=scheduled`)
     const controller = new AbortController()
     this.currentAskAbort = controller
     try {
@@ -799,32 +822,44 @@ export class Orchestrator {
       if (this.state.phase !== 'scheduled') return 'dismissed'
       const item = answer.answers.find((entry) => entry.id === 'pae-approve')
       if (item?.selected[0] !== APPROVE_LABEL) return 'replan'
-      // 批准排期载荷解码：无编码（none）= 保持原排期，不重 arm
+      // 批准排期载荷解码：无编码或与当前时刻同值（编码协议：未改动不携带）= 保持，不重 arm
       const dec = decodeApprovalSchedule(item?.custom)
       if (dec.kind === 'now' || (dec.kind === 'at' && dec.at <= this.now())) return 'now'
-      if (dec.kind === 'at') {
-        // 替换排期：更新 scheduledAt 并重 arm 新时刻
+      if (dec.kind === 'at' && dec.at !== at) {
+        // 意图变更：替换排期——更新 scheduledAt 并重 arm 新时刻（调用方据此续弹新时刻卡）
         this.state.scheduledAt = dec.at
         await this.save()
         this.deps.scheduler?.arm(dec.at)
+        return 're-approve-changed'
       }
-      return 're-approve'
+      return 're-approve-kept'
     } finally {
       this.currentAskAbort = undefined
     }
   }
 
-  /** scheduled 未到点：重 arm + 复弹回显卡 + 按选择收尾（revive 与会话打开重弹共用）。 */
-  private async resumeScheduledFuture(plan: PaePlanPayload, at: number): Promise<void> {
-    this.deps.scheduler?.arm(at)
-    const choice = await this.askScheduledReview(plan, at)
+  /**
+   * 排期回显卡选择的收尾（常驻循环闭环）：'replan' → 取消排期回规划；'now' → 取消排期
+   * 立即执行（写 all-pending todo + 启动 run）；'re-approve-changed' → 意图变更（新时刻已
+   * 重 arm）→ 仍在等待且无悬空卡则续弹常驻卡（递归闭环；每轮需用户再次变更才续，无自旋）；
+   * 're-approve-kept'/'dismissed' → 保持等待（等 fire / ping / 下次进入）。
+   * 分支先复检 phase：fire 抢先已迁出 scheduled 时收尾作废（免二次 run/回滚已启动的执行）。
+   * @param choice - presentScheduledCard 返回的选择。
+   * @param plan - 已批准的计划。
+   */
+  private async afterScheduledCardChoice(
+    choice: 're-approve-changed' | 're-approve-kept' | 'now' | 'replan' | 'dismissed',
+    plan: PaePlanPayload,
+  ): Promise<void> {
     if (choice === 'replan') {
+      if (this.state.phase !== 'scheduled') return
       this.deps.scheduler?.cancel()
       this.state.scheduledAt = undefined
       this.lastFeedback = '用户取消了已排定的执行。可调整步骤文件后重新提交。'
       return this.enterReplan(plan)
     }
     if (choice === 'now') {
+      if (this.state.phase !== 'scheduled') return
       this.deps.scheduler?.cancel()
       this.state.scheduledAt = undefined
       this.state.phase = 'executing'
@@ -834,7 +869,33 @@ export class Orchestrator {
       void this.run(plan, 1)
       return
     }
-    // 're-approve'（保持/替换）与 'dismissed'（关闭保持）无需动作
+    if (choice === 're-approve-changed') {
+      // 意图变更续卡：守卫（仍 scheduled、新时刻在、无悬空卡）→ 弹新时刻常驻卡；不满足保持等待
+      const nextAt = this.state.scheduledAt
+      if (
+        this.state.phase !== 'scheduled' ||
+        nextAt === undefined ||
+        this.currentAskAbort !== undefined
+      ) {
+        return
+      }
+      const next = await this.presentScheduledCard(plan, nextAt)
+      await this.afterScheduledCardChoice(next, plan)
+      return
+    }
+    // 're-approve-kept'（批准未改，不续卡）与 'dismissed'（关闭/守卫失败）：保持等待
+  }
+
+  /** 弹一张排期回显卡并走完整收尾闭环（presentScheduledCard → afterScheduledCardChoice）。 */
+  private async runScheduledCardLoop(plan: PaePlanPayload, at: number): Promise<void> {
+    const choice = await this.presentScheduledCard(plan, at)
+    await this.afterScheduledCardChoice(choice, plan)
+  }
+
+  /** scheduled 未到点：重 arm + 复弹回显卡 + 收尾闭环（revive 与会话打开重弹共用）。 */
+  private async resumeScheduledFuture(plan: PaePlanPayload, at: number): Promise<void> {
+    this.deps.scheduler?.arm(at)
+    await this.runScheduledCardLoop(plan, at)
   }
 
   /**
@@ -843,10 +904,11 @@ export class Orchestrator {
    * @returns 'asked'=已重弹回显卡；'ignored'=状态不满足。
    */
   async reviewScheduledAgain(): Promise<'asked' | 'ignored'> {
-    console.log(
-    )
     const plan = this.state.plan
     const at = this.state.scheduledAt
+    console.log(
+      `[pae-debug] reviewScheduledAgain phase=${this.state.phase} at=${at ?? ''} card=${this.currentAskAbort !== undefined}`,
+    )
     if (this.state.phase !== 'scheduled' || plan === undefined || at === undefined) return 'ignored'
     if (at <= this.now()) return 'ignored' // 到点/错过由 fire/revive 路径处理，不弹卡
     if (this.currentAskAbort !== undefined) return 'ignored' // 已有悬空卡
