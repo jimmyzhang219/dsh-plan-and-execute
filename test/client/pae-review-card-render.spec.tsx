@@ -134,10 +134,10 @@ describe('PaeReviewCard', () => {
 
 describe('执行时间控件', () => {
   // base.t 是恒等函数（既有用例按键名断言）；本组用例断言真实中文文案（简报样本逐字），
-  // 因此注入混合 t：date/time 输入按键名 scheduleDate/scheduleTime 作稳定标签定位
+  // 因此注入混合 t：时/分 select 按键名 scheduleHour/scheduleMinute 作稳定标签定位
   // （getByLabelText 键名查询，同组件 model-N aria-label 约定），其余键取 locale zh 文案。
   const zhT = (key: string): string =>
-    key === 'scheduleDate' || key === 'scheduleTime'
+    key === 'scheduleHour' || key === 'scheduleMinute'
       ? key
       : ((zh as Record<string, string>)[key] ?? key)
   // 回显走顶层 scheduledAt prop（简报组件契约：View 把 args.scheduledAt 透传为 prop；
@@ -147,162 +147,189 @@ describe('执行时间控件', () => {
     t: zhT,
     ...(at === undefined ? {} : { scheduledAt: at }),
   })
-  // 本组断言一律用 data-testid 定位浮层内元素（schedule-picker/schedule-status/
-  // schedule-commit/schedule-now），避免与卡底 .pae-error 的 role=status 混淆。
+  // 本组断言用 data-testid 定位浮层内元素（schedule-picker/schedule-status/
+  // schedule-commit/schedule-mode-*/schedule-calendar）。
+  const pad = (v: number) => String(v).padStart(2, '0')
+  const pickerEl = () => screen.getByTestId('schedule-picker')
   const statusText = () => screen.getByTestId('schedule-status').textContent ?? ''
   const commitBtn = () => screen.getByTestId('schedule-commit') as HTMLButtonElement
-  /** 渲染无排期卡片并点 chip 展开浮层；返回独立的 settings.update spy。 */
-  const openPicker = (update = vi.fn(async () => undefined)) => {
-    render(<PaeReviewCard {...scheduledArgs()} settings={{ update }} />)
-    fireEvent.click(screen.getByRole('button', { name: /立即执行/ }))
+  /** 排期预览/回显文案（chip 与浮层状态行共用模板）。 */
+  const previewOf = (at: number): string => {
+    const d = new Date(at)
+    return `计划于 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} 执行`
+  }
+  /** 本地日期 YYYY-MM-DD（日历 td[data-day] 查询用）。 */
+  const isoDay = (d: Date): string =>
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  /** 渲染卡片（可选回显 scheduledAt）并点 chip 展开浮层；返回独立 settings.update spy。 */
+  const openPanel = (at?: number, update = vi.fn(async () => undefined)) => {
+    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+    const chipName = at === undefined ? /^立即执行$/ : new RegExp(`^计划于 .+ 执行$`)
+    fireEvent.click(screen.getByRole('button', { name: chipName }))
     return update
   }
-  /** 按本地时区部分串填写 date/time 两个原生 input。 */
-  const fillParts = (at: Date): void => {
-    const pad = (v: number) => String(v).padStart(2, '0')
-    fireEvent.change(screen.getByLabelText('scheduleDate') as HTMLInputElement, {
-      target: {
-        value: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
-      },
-    })
-    fireEvent.change(screen.getByLabelText('scheduleTime') as HTMLInputElement, {
-      target: { value: `${pad(at.getHours())}:${pad(at.getMinutes())}` },
-    })
+  /** 切换两态分段。 */
+  const switchMode = (mode: 'now' | 'at'): void => {
+    fireEvent.click(screen.getByTestId(mode === 'now' ? 'schedule-mode-now' : 'schedule-mode-at'))
   }
-  /** 排期预览文案（chip 与浮层状态行共用格式）。 */
-  const previewOf = (at: Date): string => {
-    const pad = (v: number) => String(v).padStart(2, '0')
-    return `计划于 ${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} 执行`
+  /** 点击日历中指定本地日的单元格按钮（td[data-day] 定位；该日须在当前展示月内）。 */
+  const clickDay = (d: Date): void => {
+    const cell = pickerEl().querySelector(`td[data-day="${isoDay(d)}"]`) as HTMLElement | null
+    expect(cell, `日历应含 ${isoDay(d)} 单元格`).not.toBeNull()
+    fireEvent.click(cell!.querySelector('button') as HTMLButtonElement)
+  }
+  /** 当前展示月 caption（zh 格式：2026年9月）。 */
+  const captionOf = (): string =>
+    pickerEl().querySelector('.pae-rdp-caption_label')?.textContent ?? ''
+  /** 翻页到目标年月所在展示月（解析 zh caption；至多 3 步防死循环）。 */
+  const goToMonth = (year: number, month: number): void => {
+    for (let step = 0; step < 3; step++) {
+      const match = /^(\d{4})年(\d{1,2})月$/.exec(captionOf())
+      if (match !== null && Number(match[1]) === year && Number(match[2]) === month) return
+      fireEvent.click(screen.getByRole('button', { name: '上一月' }))
+    }
   }
 
-  it('默认（无排期）显示「立即执行」chip；打开浮层选完整时间 → 浮层内即时预览且零 settings 写；点「确定」→ 本地 when 生效、chip 转计划态', async () => {
-    const update = openPicker()
-    const when = new Date(Date.now() + 86_400_000) // 明天同时刻
-    fillParts(when)
-    // 草稿只驱动浮层状态行（schedulePreview 绿色预览），不触发自动提交
-    await waitFor(() => expect(statusText()).toContain(previewOf(when)))
-    expect(update).not.toHaveBeenCalled()
-    // 显式「确定」→ 仅本地提交（无 settings 写），浮层关闭，chip 显示「计划于 … 执行」
-    fireEvent.click(commitBtn())
-    await waitFor(() => expect(screen.queryByTestId('schedule-picker')).toBeNull())
-    expect(screen.getByRole('button', { name: previewOf(when) })).toBeTruthy()
+  it('默认 chip 显示「立即执行」；点开面板两态分段在（立即执行/指定时间），零 settings 写', () => {
+    const update = openPanel()
+    // 「立即执行」两处：chip（DOM 居前）+ 两态分段按钮
+    expect(screen.getAllByRole('button', { name: /^立即执行$/ })).toHaveLength(2)
+    const panel = pickerEl()
+    expect(within(panel).getByTestId('schedule-mode-now').textContent).toBe('立即执行')
+    expect(within(panel).getByTestId('schedule-mode-at').textContent).toBe('指定时间')
+    expect(within(panel).getByTestId('schedule-mode-now').getAttribute('aria-pressed')).toBe('true')
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('确定设置时间后点「批准」→ answer 携带 at 编码（排期意图随批准载荷传达）', async () => {
-    const update = openPicker()
-    const when = new Date(Date.now() + 86_400_000)
-    fillParts(when)
+  it('切「指定时间」→ 日历（中文 caption）+ 时/分 select；默认草稿=now+1h 即合法可确定', async () => {
+    const update = openPanel()
+    switchMode('at')
+    const panel = pickerEl()
+    expect(within(panel).getByTestId('schedule-calendar')).toBeTruthy()
+    expect(panel.querySelector('.pae-rdp-table')).toBeTruthy() // 日历表格已渲染
+    expect(captionOf()).toMatch(/^\d{4}年\d{1,2}月$/) // 中文 caption（不经 locale/date-fns）
+    const hour = within(panel).getByLabelText('scheduleHour') as HTMLSelectElement
+    const minute = within(panel).getByLabelText('scheduleMinute') as HTMLSelectElement
+    expect(hour.options).toHaveLength(24)
+    expect(minute.options).toHaveLength(60)
+    // 默认草稿 = now+1h：完整且晚于当前 → 状态行绿色预览、「确定」可用
+    await waitFor(() => expect(statusText()).toMatch(/计划于 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 执行/))
+    expect(commitBtn().disabled).toBe(false)
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('改时/分后点「确定」→ 本地 when 生效、chip 变「计划于 …」；点「批准」→ answer 携带 at 编码', async () => {
+    const update = openPanel()
+    switchMode('at')
+    fireEvent.change(screen.getByLabelText('scheduleHour'), { target: { value: '15' } })
+    fireEvent.change(screen.getByLabelText('scheduleMinute'), { target: { value: '30' } })
+    await waitFor(() => expect(commitBtn().disabled).toBe(false))
     fireEvent.click(commitBtn())
     await waitFor(() => expect(screen.queryByTestId('schedule-picker')).toBeNull())
-    // 期望 epoch 由输入的各部分推导（输入不含秒/毫秒，不能直接用 when.getTime()）
-    const expected = new Date(
-      when.getFullYear(),
-      when.getMonth(),
-      when.getDate(),
-      when.getHours(),
-      when.getMinutes(),
-    ).getTime()
+    // 草稿日 = now+1h 的日期部分；时/分取 select 值（分钟逐字断言）
+    expect(
+      screen.getByRole('button', { name: /^计划于 \d{4}-\d{2}-\d{2} 15:30 执行$/ }),
+    ).toBeTruthy()
+    expect(update).not.toHaveBeenCalled() // 排期选择全过程零后端调用
     fireEvent.click(screen.getByRole('button', { name: '批准' }))
     await waitFor(() => {
-      expect(base.pending.answer).toHaveBeenLastCalledWith({
-        answers: [{ id: 'pae-approve', selected: ['批准'], custom: `paeSchedule:at:${expected}` }],
-      })
+      const answerMock = base.pending.answer as ReturnType<typeof vi.fn>
+      const calls = answerMock.mock.calls
+      const payload = calls.at(-1)![0] as { answers: Array<{ custom?: string }> }
+      const custom = payload.answers[0]!.custom
+      expect(custom).toMatch(/^paeSchedule:at:\d+$/)
+      const at = Number(custom!.slice('paeSchedule:at:'.length))
+      expect(at).toBeGreaterThan(Date.now()) // 数字落在合理未来区间（草稿 now+1h 附近）
+      expect(at).toBeLessThan(Date.now() + 2 * 86_400_000)
     })
-    expect(update).not.toHaveBeenCalled() // 排期全程无 settings 写
-  })
-
-  it('回显卡：scheduledAt 存在 → 默认显示计划时间 chip（不显示立即执行）', () => {
-    const at = new Date(2026, 8, 6, 10, 0).getTime()
-    render(<PaeReviewCard {...scheduledArgs(at)} />)
-    expect(screen.getByText(/计划于 2026-09-06 10:00 执行/)).toBeTruthy()
-  })
-
-  it('回显卡点「清除排期」× → 仅本地清 when=null（无 settings 写）；点「批准」→ answer 携带 now 编码', async () => {
-    const update = vi.fn(async () => undefined)
-    const at = Date.now() + 86_400_000
-    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
-    // 排期态 chip 旁的 ×（aria-label=清除排期）与浮层内「立即执行」按钮同属 clearSchedule，
-    // 但可访问名不同（× 用 scheduleClear，避免与浮层按钮重名）
-    fireEvent.click(screen.getByRole('button', { name: /清除排期/ }))
     expect(update).not.toHaveBeenCalled()
-    // chip 回「立即执行」态（面板未展开，唯一匹配）
-    expect(screen.getByRole('button', { name: /立即执行/ })).toBeTruthy()
+  })
+
+  it('回显卡：chip 显示原排期；点开面板 at 态预填（状态行预览原时刻、日历选中、时/分对齐）', () => {
+    const when = new Date(Date.now() + 7 * 86_400_000) // 未来 7 天（跨月安全）
+    const at = when.getTime()
+    const update = vi.fn(async () => undefined)
+    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+    expect(screen.getByRole('button', { name: previewOf(at) })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: previewOf(at) })) // 点 chip 展开
+    const panel = pickerEl()
+    // 有排期 → 展开默认进入「指定时间」且预填原时刻
+    expect(within(panel).getByTestId('schedule-mode-at').getAttribute('aria-pressed')).toBe('true')
+    expect(statusText()).toBe(previewOf(at)) // 原时刻未过期 → 预览即合法
+    // select 的 option value 为数字（文本补零展示），按数值比较
+    expect(Number((within(panel).getByLabelText('scheduleHour') as HTMLSelectElement).value)).toBe(
+      when.getHours(),
+    )
+    expect(
+      Number((within(panel).getByLabelText('scheduleMinute') as HTMLSelectElement).value),
+    ).toBe(when.getMinutes())
+    const selected = panel.querySelector('.pae-rdp-day_selected')
+    expect(selected?.getAttribute('data-day')).toBe(isoDay(when))
+    expect(commitBtn().disabled).toBe(false)
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('回显卡切「立即执行」→ 确定收口 = 本地清排期；点「批准」→ answer 携带 now 编码', async () => {
+    const at = Date.now() + 7 * 86_400_000
+    const update = openPanel(at)
+    switchMode('now')
+    // 立即态状态行即时提示；确定收口（= 清排期）关闭面板
+    expect(statusText()).toBe('批准后将立即开始执行')
+    fireEvent.click(commitBtn())
+    await waitFor(() => expect(screen.queryByTestId('schedule-picker')).toBeNull())
+    expect(screen.getByRole('button', { name: /^立即执行$/ })).toBeTruthy()
+    expect(update).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '批准' }))
     await waitFor(() => {
       expect(base.pending.answer).toHaveBeenLastCalledWith({
         answers: [{ id: 'pae-approve', selected: ['批准'], custom: 'paeSchedule:now' }],
       })
     })
-  })
-
-  it('已过去的时间（完整输入但 < now）→ 浮层内错误文案、「确定」禁用、不写 settings 也不进卡底错误', async () => {
-    const update = openPicker()
-    fillParts(new Date(Date.now() - 60_000))
-    await waitFor(() => expect(statusText()).toMatch(/晚于当前/))
-    expect(commitBtn().disabled).toBe(true)
-    expect(update).not.toHaveBeenCalled()
-    // 校验反馈只在浮层状态行（role=status 播报 past 文案）；卡底 .pae-error 保持空串（无双写）。
-    // DOM 顺序：header 内浮层状态行在前，卡底 .pae-error 在后。
-    expect(screen.getAllByRole('status').map((el) => el.textContent)).toEqual([
-      '执行时间需晚于当前时刻',
-      '',
-    ])
-  })
-
-  it('过去时间输入后浮层状态行以 role=status 可被辅助技术感知（aria-live 播报入口）', async () => {
-    openPicker()
-    fillParts(new Date(Date.now() - 60_000))
-    // within(picker) 定位，避免与卡底 .pae-error 的 role=status 混淆
-    await waitFor(() =>
-      expect(within(screen.getByTestId('schedule-picker')).getByRole('status').textContent).toMatch(
-        /晚于当前/,
-      ),
-    )
-  })
-
-  it('浮层点「立即执行」→ 仅本地清为立即（无 settings 写）并关闭浮层', async () => {
-    const update = openPicker()
-    fireEvent.click(screen.getByTestId('schedule-now'))
-    expect(update).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('schedule-picker')).toBeNull()
-  })
-
-  it('草稿不完整（只填日期）→ 浮层显示 scheduleHint 文案且「确定」禁用、不写 settings', async () => {
-    const update = openPicker()
-    const future = new Date(Date.now() + 86_400_000)
-    fireEvent.change(screen.getByLabelText('scheduleDate') as HTMLInputElement, {
-      target: {
-        value: `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, '0')}-${String(future.getDate()).padStart(2, '0')}`,
-      },
-    })
-    await waitFor(() => expect(statusText()).toContain('选择完整日期与时间后生效'))
-    expect(commitBtn().disabled).toBe(true)
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('浮层内先输入过去时间、再改未来 → 错误转预览、「确定」从禁用变可用', async () => {
-    const update = openPicker()
-    fillParts(new Date(Date.now() - 60_000))
-    await waitFor(() => expect(statusText()).toMatch(/晚于当前/))
+  it('回显卡 chip 旁 × → 仅本地清 when=null（无 settings 写），chip 回立即执行', () => {
+    const at = Date.now() + 7 * 86_400_000
+    const update = vi.fn(async () => undefined)
+    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+    // × 的可访问名为 scheduleClear（与两态分段按钮区分）
+    fireEvent.click(screen.getByRole('button', { name: /清除排期/ }))
+    expect(screen.getByRole('button', { name: /^立即执行$/ })).toBeTruthy()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('过去时刻（今天 00:00）→ 状态行 schedulePast 红字（role=status）+ 确定禁用；改未来后恢复可用', async () => {
+    const update = openPanel()
+    switchMode('at')
+    const now = new Date()
+    // 先把草稿时/分锁定 00:00。默认草稿=now+1h 可能正是今天（点今天会反选成未选），
+    // 因此先经「下一月 15 日」把选中移开，再回到今天所在月点选今天 → 组合出「过去时刻」
+    fireEvent.change(screen.getByLabelText('scheduleHour'), { target: { value: '0' } })
+    fireEvent.change(screen.getByLabelText('scheduleMinute'), { target: { value: '0' } })
+    goToMonth(now.getFullYear(), now.getMonth() + 1) // 回到今天所在月（默认草稿至多晚一天）
+    fireEvent.click(screen.getByRole('button', { name: '下一月' }))
+    clickDay(new Date(now.getFullYear(), now.getMonth() + 1, 15, 0, 0))
+    fireEvent.click(screen.getByRole('button', { name: '上一月' }))
+    clickDay(now)
+    await waitFor(() => expect(statusText()).toBe('执行时间需晚于当前时刻'))
     expect(commitBtn().disabled).toBe(true)
-    const future = new Date(Date.now() + 86_400_000)
-    fireEvent.change(screen.getByLabelText('scheduleDate') as HTMLInputElement, {
-      target: {
-        value: `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, '0')}-${String(future.getDate()).padStart(2, '0')}`,
-      },
-    })
-    // 时间部分沿用刚才的过去输入；日期改到明天后整体必然晚于当前 → 预览（时间分钟不逐字断言，
-    // 避免用例执行跨分钟边界导致期望值与草稿保留值差 1 分钟的偶发）
-    await waitFor(() => expect(statusText()).toMatch(/计划于 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 执行/))
+    // 浮层状态行 role=status 可被辅助技术感知（日历 caption 覆盖已剥离重复 role）
+    expect(within(pickerEl()).getByRole('status').textContent).toBe('执行时间需晚于当前时刻')
+    expect(update).not.toHaveBeenCalled()
+    // 改下月 15 日 12:00（必为未来）→ 错误转预览、「确定」从禁用变可用
+    fireEvent.click(screen.getByRole('button', { name: '下一月' }))
+    const future = new Date(now.getFullYear(), now.getMonth() + 1, 15, 12, 0)
+    clickDay(future)
+    fireEvent.change(screen.getByLabelText('scheduleHour'), { target: { value: '12' } })
+    await waitFor(() => expect(statusText()).toBe(previewOf(future.getTime())))
     expect(commitBtn().disabled).toBe(false)
     expect(update).not.toHaveBeenCalled()
   })
 
   it('打开浮层不操作再点 chip 关闭 → 草稿丢弃、无任何 settings.update 调用', () => {
-    const update = openPicker()
-    // 浮层展开后「立即执行」文案出现两处（chip 与浮层内按钮）；chip 在 DOM 中居前
-    fireEvent.click(screen.getAllByRole('button', { name: /立即执行/ })[0]!)
+    const update = openPanel()
+    // 浮层展开后「立即执行」出现两处（chip 与两态分段）；chip 在 DOM 中居前
+    fireEvent.click(screen.getAllByRole('button', { name: /^立即执行$/ })[0]!)
     expect(screen.queryByTestId('schedule-picker')).toBeNull()
     expect(update).not.toHaveBeenCalled()
   })

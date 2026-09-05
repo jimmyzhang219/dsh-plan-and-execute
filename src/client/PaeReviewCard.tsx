@@ -7,6 +7,12 @@
  * 注意（2026-08-30 线上事故）：视图不得使用 useChat/useProjection——composer 座位调用
  * useChat 触发宿主聊天快照构建器脱绑崩溃（this.valuesDirty），审批提问不可见导致宿主
  * askOrDismiss 永久挂起。步骤数据一律来自审批问题 detail（parsePlanDetail，自有格式）。
+ *
+ * 排期交互（Wave 3 验收定案）：chip 点开浮层（两态分段 + 日历 + 时/分）选时间，全部
+ * 本地状态、零后端调用（不再写 pae-schedule settings）；「批准」时经 encodeApprovalSchedule
+ * 把排期意图随答案 custom 传回。日历控件用 react-day-picker@9.14.0（tsup 打进 client
+ * bundle）：不引入其 package css（无 css 管线），不依赖 date-fns locale，样式全部
+ * classNames + 本文件同目录 styles.ts 自绘。
  * @module dsh-plan-and-execute/client/PaeReviewCard
  */
 import { useEffect, useState, type ReactElement } from 'react'
@@ -15,6 +21,8 @@ import type { ClientRemote, ModelCatalog } from '@deepseek-ai/dsh-api-remotes/cl
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only：composer 槽位类型合并（本组件不再消费 useChat/useProjection）。
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { DayPicker } from 'react-day-picker'
+import type { CaptionLabelProps, WeekdayProps } from 'react-day-picker'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import { flattenCatalog, optionKey } from './plan-card.ts'
 import { PAE_MODELS_NS } from '../state.ts'
@@ -26,7 +34,47 @@ import {
   questionView,
   type PlanReviewPendingLike,
 } from './review-card.ts'
-import type { NS } from './locale.ts'
+import { zh as zhTexts, type NS } from './locale.ts'
+
+/** 中文星期单字（数组下标 = Date.getDay()：0=周日 → 「日」…6=周六 → 「六」）。 */
+const ZH_WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
+/** 英文星期缩写（数组下标 = Date.getDay()；列序由 weekStartsOn=1 的日期序列决定）。 */
+const EN_WEEKDAY = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+/** 英文月份全称（数组下标 = month - 1；中文月份走 zh 文案拼写，不经 date-fns locale）。 */
+const EN_MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
+
+/**
+ * CaptionLabel 覆盖：react-day-picker@9.14 的 CaptionLabel 组件不接收日期（文案以
+ * children 传入、且默认携带 role=status 会与卡内排期状态行重复播报），因此本覆盖渲染
+ * 净化的 <span>（丢弃 role/aria-live，保留 className 供样式与测试定位）——中文月份
+ * 文案（如「2026年9月」）由下方 formatCaption formatter 计算进 children（formatter
+ * 才持有展示月 Date，见 DayPicker 内部装配）。
+ */
+function PaeCaptionLabel(props: CaptionLabelProps): ReactElement {
+  return <span className={props.className}>{props.children}</span>
+}
+
+/**
+ * Weekday 覆盖：同 CaptionLabel 情形，@9.14 的 Weekday 不接收星期序号（单字文案以
+ * children 传入），本覆盖保持 <th> 语义透传——中文单字（周一开头 一…日）由下方
+ * formatWeekdayName formatter 计算进 children。
+ */
+function PaeWeekday({ children, ...rest }: WeekdayProps): ReactElement {
+  return <th {...rest}>{children}</th>
+}
 
 /** 决策答案形状（与宿主 AskUserQuestionAnswer 一致的最小面）。 */
 interface AnswerLike {
@@ -44,29 +92,32 @@ interface AnswerLike {
  */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
-/** epoch ms → 本地 'YYYY-MM-DD HH:mm'（chip 显示；与服务端 formatScheduleAt 同格式）。 */
+/** epoch ms → 本地 'YYYY-MM-DD HH:mm'（chip/状态行显示；与服务端 formatScheduleAt 同格式）。 */
 function formatLocal(at: number): string {
   const d = new Date(at)
   const pad = (v: number): string => String(v).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-/** 'YYYY-MM-DD' + 'HH:mm'（两个原生 input 值）→ epoch ms；缺任一部分返回 undefined。 */
-function composeAt(datePart: string, timePart: string): number | undefined {
-  if (datePart === '' || timePart === '') return undefined
-  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart)
-  const tm = /^(\d{2}):(\d{2})$/.exec(timePart)
-  if (dm === null || tm === null) return undefined
-  const d = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), Number(tm[1]), Number(tm[2]))
-  return d.getTime()
-}
-/** epoch ms → date/time 两个 input 的 value（本地）。 */
-function splitLocal(at: number): { datePart: string; timePart: string } {
+
+/** epoch ms → 日历选中日（本地零点）与 时/分 三份本地值（at 草稿拆分）。 */
+function splitLocal(at: number): { day: Date; hour: number; minute: number } {
   const d = new Date(at)
-  const pad = (v: number): string => String(v).padStart(2, '0')
   return {
-    datePart: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-    timePart: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    day: new Date(d.getFullYear(), d.getMonth(), d.getDate()),
+    hour: d.getHours(),
+    minute: d.getMinutes(),
   }
+}
+
+/** 日历日 + 时/分 → epoch ms（本地时刻；day 缺省返回 undefined）。 */
+function composeAt(day: Date | undefined, hour: number, minute: number): number | undefined {
+  if (day === undefined) return undefined
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute).getTime()
+}
+
+/** at 模式默认草稿：now+1h 取整到分（跨天进位由 Date 构造自然处理；必晚于当前时刻）。 */
+function defaultDraftAt(now: number): number {
+  return Math.floor((now + 3_600_000) / 60_000) * 60_000
 }
 
 export interface PaeReviewCardProps {
@@ -86,7 +137,7 @@ export interface PaeReviewCardProps {
   readonly current: { readonly provider: string; readonly model: string }
   /** 打开路径回调（目录/步骤文件，经 session.openWorkspacePath）。 */
   readonly openPath: (path: string) => void
-  /** 静默写 settings 通道（模型选择持久化）。 */
+  /** 静默写 settings 通道（模型选择持久化；排期已不走此通道）。 */
   readonly settings: {
     readonly update: (
       ns: string,
@@ -117,16 +168,18 @@ export function PaeReviewCard({
   const [feedback, setFeedback] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [when, setWhen] = useState<number | null>(scheduledAt ?? null) // null=立即
-  const [pickerOpen, setPickerOpen] = useState(false)
-  // 浮层草稿态（date/time 变更不自动提交，经「确定」才写排期）；初始 = 回显排期，无则空，
-  // chip 每次展开时重置为当前 when（togglePicker）。
-  const [datePart, setDatePart] = useState(() =>
-    scheduledAt === undefined ? '' : splitLocal(scheduledAt).datePart,
-  )
-  const [timePart, setTimePart] = useState(() =>
-    scheduledAt === undefined ? '' : splitLocal(scheduledAt).timePart,
-  )
+  /** 排期选择（本地态）：null=立即执行；number=指定时刻。 */
+  const [when, setWhen] = useState<number | null>(scheduledAt ?? null)
+  /** 浮层开合（chip 点击切换；草稿经「确定」才写回 when）。 */
+  const [open, setOpen] = useState(false)
+  /** 浮层两态：'immediate'=立即执行；'at'=指定时间（日历 + 时/分）。 */
+  const [mode, setMode] = useState<'immediate' | 'at'>('immediate')
+  /** at 态草稿：日历选中日（本地零点；未选=undefined 提示 scheduleHint）。 */
+  const [draftDay, setDraftDay] = useState<Date | undefined>(undefined)
+  /** at 态草稿：时（0-23）。 */
+  const [draftHour, setDraftHour] = useState(0)
+  /** at 态草稿：分（0-59）。 */
+  const [draftMinute, setDraftMinute] = useState(0)
 
   /** 决策提交包装：置 busy、清错误；send 抛错时折叠为卡片内错误文案。 */
   const settle = (send: () => Promise<unknown>): void => {
@@ -184,48 +237,93 @@ export function PaeReviewCard({
       .update(PAE_MODELS_NS, buildSettingsPatch(sessionId, next), undefined)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
   }
-  /** 草稿组合时间（date/time 输入只改草稿态，不自动提交）。 */
-  const draftAt = composeAt(datePart, timePart)
-  /** 草稿完整且晚于当前时刻（「确定」可用与绿色预览的共用条件）。 */
-  const draftReady = draftAt !== undefined && draftAt > Date.now()
-  /** 浮层状态行修饰类：合法=--ok、过去=--err、不完整=无（弱化提示）。 */
-  const draftStatusMod = draftAt === undefined ? '' : draftReady ? '--ok' : '--err'
-  /** 浮层状态行文案：完整且未来=绿色预览 / 完整但过去=红色错误 / 不完整=弱化提示。 */
-  const draftStatusText =
-    draftAt === undefined
-      ? t('scheduleHint')
-      : draftReady
-        ? t('schedulePreview').replace('%s', formatLocal(draftAt))
-        : t('schedulePast')
-  /** chip 点击：切换浮层开合；展开时草稿重置为当前排期（无排期则日期/时间清空）。 */
-  const togglePicker = (): void => {
-    if (!pickerOpen) {
-      if (when === null) {
-        setDatePart('')
-        setTimePart('')
-      } else {
-        const parts = splitLocal(when)
-        setDatePart(parts.datePart)
-        setTimePart(parts.timePart)
-      }
+
+  /** 按时刻填充 at 草稿（日历日 + 时/分）。 */
+  const seedDraft = (at: number): void => {
+    const parts = splitLocal(at)
+    setDraftDay(parts.day)
+    setDraftHour(parts.hour)
+    setDraftMinute(parts.minute)
+  }
+  /** 浮层关闭态 → 草稿无效标记：让下次展开按 mode 重新播种（不提交即丢弃）。 */
+  const resetDraft = (): void => {
+    setDraftDay(undefined)
+  }
+  /** 两态切换（进入 at 且草稿未播种时：已排期=原时刻；未排期=now+1h 默认草稿）。 */
+  const enterMode = (next: 'immediate' | 'at'): void => {
+    setMode(next)
+    if (next === 'at' && draftDay === undefined) {
+      if (when !== null) seedDraft(when)
+      else seedDraft(defaultDraftAt(Date.now()))
     }
-    setPickerOpen((open) => !open)
   }
-  /** 「确定」按钮：草稿完整且晚于当前才提交（与按钮禁用态同条件）；仅本地写 when 并关浮层（零后端调用）。 */
+  /** chip 点击：展开时按当前 when 播种两态与草稿；关闭丢弃未提交草稿（零后端调用）。 */
+  const togglePicker = (): void => {
+    if (!open) {
+      setMode(when === null ? 'immediate' : 'at')
+      if (when !== null) seedDraft(when)
+    } else {
+      resetDraft()
+    }
+    setOpen((wasOpen) => !wasOpen)
+  }
+  /** 日历选中：只更新草稿日期（时/分保留在 select 中）。 */
+  const onSelectDay = (day: Date | undefined): void => {
+    setDraftDay(
+      day === undefined ? undefined : new Date(day.getFullYear(), day.getMonth(), day.getDate()),
+    )
+  }
+  /** at 草稿完整时刻（本地）；日未选 → undefined（提示 scheduleHint）。 */
+  const draftAt = composeAt(draftDay, draftHour, draftMinute)
+  /** at 草稿是否合法（晚于当前时刻）。 */
+  const draftReady = draftAt !== undefined && draftAt > Date.now()
+  /** 浮层状态行修饰类：合法=--ok、过去=--err、immediate/不完整=无。 */
+  const draftStatusMod =
+    mode === 'immediate' ? '' : draftAt === undefined ? '' : draftReady ? '--ok' : '--err'
+  /** 浮层状态行文案：immediate=即时提示；at 完整未来=绿色预览；at 过去=红错；未选日=弱化提示。 */
+  const draftStatusText =
+    mode === 'immediate'
+      ? t('scheduleImmediate')
+      : draftAt === undefined
+        ? t('scheduleHint')
+        : draftReady
+          ? t('schedulePreview').replace('%s', formatLocal(draftAt))
+          : t('schedulePast')
+  /** 「确定」收口（本地）：immediate → when=null（清排期）；at 合法 → when=草稿。关浮层。 */
   const commitSchedule = (): void => {
-    if (draftAt === undefined || !draftReady) return
+    if (mode === 'immediate') {
+      setWhen(null)
+    } else {
+      if (draftAt === undefined || !draftReady) return
+      setWhen(draftAt)
+    }
+    setOpen(false)
+    resetDraft()
     setError(null)
-    setWhen(draftAt)
-    setPickerOpen(false)
   }
-  /** 清除排期（立即执行）：浮层按钮与 chip 的 × 共用；仅本地清 when=null（排期意图在批准时随载荷传达）。 */
+  /** 清除排期（chip ×）：仅本地清 when=null（排期意图在批准时随载荷传达）。 */
   const clearSchedule = (): void => {
     setWhen(null)
-    setDatePart('')
-    setTimePart('')
-    setPickerOpen(false)
+    setOpen(false)
+    resetDraft()
     setError(null)
   }
+
+  // —— 日历中文本地化（不经 date-fns locale；语言按 t 的 approve 输出判定）——
+  const zhLocale = t('approve') === zhTexts.approve
+  /** 展示月 caption：zh「2026年9月」/ en「September 2026」。 */
+  const formatCaption = (date: Date): string =>
+    zhLocale
+      ? `${date.getFullYear()}年${date.getMonth() + 1}月`
+      : `${EN_MONTHS[date.getMonth()]} ${date.getFullYear()}`
+  /** 星期表头单字：zh 一二三四五六日（周一开头）；en Mo..Su（按日期的 getDay 取字）。 */
+  const formatWeekdayName = (date: Date): string =>
+    zhLocale ? ZH_WEEKDAY[date.getDay()]! : EN_WEEKDAY[date.getDay()]!
+  /** 今天（本地零点）：日历禁用早于今天的所有日期。 */
+  const startOfToday = ((): Date => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  })()
 
   return (
     <div className="pae-frame">
@@ -239,17 +337,17 @@ export function PaeReviewCard({
           <strong>{t('planReview')}</strong>
           <span className="pae-header-actions">
             <span className="pae-schedule">
-              {/* 宿主 ButtonVariant 无 'default'（primary/ghost/outline/toolbar）：
-                  排期态用 toolbar（中性填充 chip），立即态用 outline（简报语义对照） */}
+              {/* chip：显示当前选择（立即执行 / 计划于 …）；点击开/关浮层 */}
               <Button
                 size="sm"
                 variant={when === null ? 'outline' : 'toolbar'}
                 className="pae-schedule-toggle"
+                aria-expanded={open}
                 onClick={togglePicker}
               >
                 {when === null
-                  ? t('scheduleNow')
-                  : t('scheduleAtHint').replace('%s', formatLocal(when))}
+                  ? t('immediateMode')
+                  : t('scheduleAtChip').replace('%s', formatLocal(when))}
               </Button>
               {when !== null ? (
                 <button
@@ -261,29 +359,103 @@ export function PaeReviewCard({
                   ×
                 </button>
               ) : null}
-              {pickerOpen ? (
+              {open ? (
                 <div className="pae-schedule-picker" data-testid="schedule-picker">
-                  {/* date/time 只进草稿态：提交必须经「确定」按钮（显式保存入口） */}
-                  <label>
-                    {t('scheduleDate')}
-                    <input
-                      type="date"
-                      aria-label={t('scheduleDate')}
-                      value={datePart}
-                      onChange={(e) => setDatePart(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    {t('scheduleTime')}
-                    <input
-                      type="time"
-                      aria-label={t('scheduleTime')}
-                      value={timePart}
-                      onChange={(e) => setTimePart(e.target.value)}
-                    />
-                  </label>
-                  {/* 草稿即时反馈状态行（取代卡底 .pae-error 承担排期校验文案）；
-                      role=status + aria-live：非法输入对屏幕阅读器即时播报（空文案不播报，
+                  {/* 两态分段：立即执行（确定=清排期）/ 指定时间（日历 + 时/分） */}
+                  <div className="pae-schedule-modes" role="group" aria-label={t('atMode')}>
+                    <button
+                      type="button"
+                      className={`pae-schedule-mode${mode === 'immediate' ? ' pae-schedule-mode--active' : ''}`}
+                      data-testid="schedule-mode-now"
+                      aria-pressed={mode === 'immediate'}
+                      onClick={() => enterMode('immediate')}
+                    >
+                      {t('immediateMode')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pae-schedule-mode${mode === 'at' ? ' pae-schedule-mode--active' : ''}`}
+                      data-testid="schedule-mode-at"
+                      aria-pressed={mode === 'at'}
+                      onClick={() => enterMode('at')}
+                    >
+                      {t('atMode')}
+                    </button>
+                  </div>
+                  {mode === 'at' ? (
+                    <>
+                      {/* 日历：react-day-picker（classNames 全量映射，样式见 styles.ts；无包 css） */}
+                      <div className="pae-schedule-calendar" data-testid="schedule-calendar">
+                        <DayPicker
+                          mode="single"
+                          weekStartsOn={1}
+                          selected={draftDay}
+                          onSelect={onSelectDay}
+                          disabled={{ before: startOfToday }}
+                          classNames={{
+                            root: 'pae-rdp-root',
+                            months: 'pae-rdp-months',
+                            month: 'pae-rdp-month',
+                            month_caption: 'pae-rdp-caption',
+                            caption_label: 'pae-rdp-caption_label',
+                            nav: 'pae-rdp-nav',
+                            button_previous: 'pae-rdp-nav_button',
+                            button_next: 'pae-rdp-nav_button',
+                            month_grid: 'pae-rdp-table',
+                            weekdays: 'pae-rdp-head_row',
+                            weekday: 'pae-rdp-head_cell',
+                            weeks: 'pae-rdp-weeks',
+                            week: 'pae-rdp-row',
+                            day: 'pae-rdp-day',
+                            day_button: 'pae-rdp-day_button',
+                            today: 'pae-rdp-day_today',
+                            outside: 'pae-rdp-day_outside',
+                            disabled: 'pae-rdp-day_disabled',
+                            selected: 'pae-rdp-day_selected',
+                          }}
+                          components={{ CaptionLabel: PaeCaptionLabel, Weekday: PaeWeekday }}
+                          formatters={{
+                            formatCaption: (date: Date) => formatCaption(date),
+                            formatWeekdayName: (date: Date) => formatWeekdayName(date),
+                          }}
+                          labels={{
+                            labelPrevious: () => t('schedulePrev'),
+                            labelNext: () => t('scheduleNext'),
+                          }}
+                        />
+                      </div>
+                      {/* 时/分原生 select（步长 1；只进草稿态，确定才收口） */}
+                      <div className="pae-schedule-time">
+                        <select
+                          className="pae-schedule-select"
+                          aria-label={t('scheduleHour')}
+                          value={draftHour}
+                          onChange={(event) => setDraftHour(Number(event.target.value))}
+                        >
+                          {Array.from({ length: 24 }, (_, hour) => (
+                            <option key={hour} value={hour}>
+                              {String(hour).padStart(2, '0')}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="pae-schedule-colon">:</span>
+                        <select
+                          className="pae-schedule-select"
+                          aria-label={t('scheduleMinute')}
+                          value={draftMinute}
+                          onChange={(event) => setDraftMinute(Number(event.target.value))}
+                        >
+                          {Array.from({ length: 60 }, (_, minute) => (
+                            <option key={minute} value={minute}>
+                              {String(minute).padStart(2, '0')}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  ) : null}
+                  {/* 草稿即时反馈状态行：immediate=即时提示 / at=预览·过去·不完整；
+                      role=status + aria-live：对屏幕阅读器即时播报（空文案不播报，
                       与卡底 .pae-error 的 role=status 并存无冲突） */}
                   <div
                     className={`pae-schedule-status${draftStatusMod}`}
@@ -296,17 +468,9 @@ export function PaeReviewCard({
                   <div className="pae-schedule-picker-actions">
                     <Button
                       size="sm"
-                      variant="ghost"
-                      data-testid="schedule-now"
-                      onClick={clearSchedule}
-                    >
-                      {t('scheduleNow')}
-                    </Button>
-                    <Button
-                      size="sm"
                       variant="primary"
                       data-testid="schedule-commit"
-                      disabled={!draftReady}
+                      disabled={mode === 'at' && !draftReady}
                       onClick={commitSchedule}
                     >
                       {t('scheduleConfirm')}

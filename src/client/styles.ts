@@ -77,29 +77,162 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 300px; /* 容纳日期/时间输入 + 状态行 + 操作行（验收反馈：浮层太窄） */
+  width: 340px; /* 容纳两态分段 + 日历 + 时/分 + 状态行 + 操作行（验收反馈：控件主流化） */
   padding: 10px 12px;
   background: var(--dsw-specific-input-major, #2a2a2e);
   border: 1px solid var(--dsw-alias-border-l1, currentColor);
   border-radius: 10px;
   box-shadow: var(--dsw-shadow-lv2, none);
 }
-.pae-schedule-picker label {
+/* 两态分段：立即执行 / 指定时间 */
+.pae-schedule-modes {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  background: var(--dsw-alias-bg-base, transparent);
+  border: 1px solid var(--dsw-alias-border-l1, currentColor);
+  border-radius: 8px;
+}
+.pae-schedule-mode {
+  flex: 1 1 auto;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.pae-schedule-mode--active {
+  background: var(--dsw-alias-state-warn-primary, #ffd166);
+  color: var(--dsw-specific-input-major, #2a2a2e);
+  font-weight: 600;
+}
+/* 日历：react-day-picker classNames 全量映射（.pae-rdp-*），无包 css。
+   结构：.pae-rdp-months > nav(.pae-rdp-nav) + .pae-rdp-month > caption + table */
+.pae-schedule-calendar .pae-rdp-root { font-size: 13px; }
+.pae-schedule-calendar .pae-rdp-months {
+  display: flex;
+  flex-direction: column;
+}
+.pae-schedule-calendar .pae-rdp-month {
+  display: flex;
+  flex-direction: column;
+}
+.pae-schedule-calendar .pae-rdp-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary, inherit);
+  min-height: 26px;
+  margin-bottom: 2px;
 }
-.pae-schedule-picker input {
-  width: 168px; /* 与加宽后的浮层匹配，原生控件自带图标不留空隙 */
+.pae-schedule-calendar .pae-rdp-caption {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 2px 0 4px;
+}
+.pae-schedule-calendar .pae-rdp-caption_label {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.pae-schedule-calendar .pae-rdp-nav_button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, inherit);
+  cursor: pointer;
+}
+.pae-schedule-calendar .pae-rdp-nav_button:hover {
+  background: var(--dsw-alias-bg-base, transparent);
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.pae-schedule-calendar .pae-rdp-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.pae-schedule-calendar .pae-rdp-head_cell {
+  padding: 2px 0;
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  text-align: center;
+}
+.pae-schedule-calendar .pae-rdp-row td {
+  padding: 1px 0;
+  text-align: center;
+}
+.pae-schedule-calendar .pae-rdp-day_button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary, inherit);
+  font-size: 13px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.pae-schedule-calendar .pae-rdp-day_button:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-base, transparent);
+}
+/* 选中日：主题金底深字；今日：金色描边（与选中并存时以选中底为主） */
+.pae-schedule-calendar .pae-rdp-day_selected .pae-rdp-day_button,
+.pae-schedule-calendar .pae-rdp-day_selected .pae-rdp-day_button:hover {
+  background: var(--dsw-alias-state-warn-primary, #ffd166);
+  border-color: var(--dsw-alias-state-warn-primary, #ffd166);
+  color: var(--dsw-specific-input-major, #2a2a2e);
+  font-weight: 600;
+}
+.pae-schedule-calendar .pae-rdp-day_today:not(.pae-rdp-day_selected) .pae-rdp-day_button {
+  border-color: var(--dsw-alias-state-warn-primary, #ffd166);
+}
+/* 邻月日弱化；过去日禁用（不可点、hover 无反馈） */
+.pae-schedule-calendar .pae-rdp-day_outside .pae-rdp-day_button {
+  color: var(--dsw-alias-label-secondary, inherit);
+  opacity: 0.45;
+}
+.pae-schedule-calendar .pae-rdp-day_disabled .pae-rdp-day_button,
+.pae-schedule-calendar .pae-rdp-day_disabled .pae-rdp-day_button:hover {
+  background: transparent;
+  cursor: default;
+  opacity: 0.35;
+}
+/* 时/分选择 */
+.pae-schedule-time {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pae-schedule-select {
+  width: 64px;
   background: var(--dsw-alias-bg-base, transparent);
   color: var(--dsw-alias-label-primary, inherit);
   border: 1px solid var(--dsw-alias-border-l1, currentColor);
   border-radius: 6px;
-  padding: 2px 6px;
+  padding: 2px 4px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.pae-schedule-colon {
+  color: var(--dsw-alias-label-secondary, inherit);
   font-size: 13px;
   line-height: 18px;
 }
