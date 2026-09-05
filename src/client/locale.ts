@@ -18,16 +18,14 @@ export const zh = {
   feedback: '驳回反馈',
   feedbackHint: '选「继续修改」时附上反馈，可选；新增的独立任务会成为新步骤',
   discuss: '讨论',
-  immediateMode: '立即执行', // chip 立即态 + 浮层两态分段「立即执行」
-  atMode: '指定时间', // 浮层两态分段「指定时间」
+  scheduleNow: '立即执行', // chip 立即态 + 浮层左下「立即执行」按钮（清排期/维持立即收口）
   scheduleAtChip: '计划于 %s 执行', // chip 排期态模板（%s=YYYY-MM-DD HH:mm）
   scheduleClear: '清除排期', // 排期态 chip × 的可访问名
-  scheduleImmediate: '批准后将立即开始执行', // 浮层立即态状态行提示
   scheduleHour: '时', // 时 select aria-label
   scheduleMinute: '分', // 分 select aria-label
-  scheduleConfirm: '确定', // 浮层「确定」按钮（收口两态选择）
-  schedulePast: '执行时间需晚于当前时刻',
-  scheduleHint: '选择完整日期与时间后生效',
+  scheduleConfirm: '确定', // 浮层右下「确定」按钮（提交当前草稿时间）
+  schedulePast: '执行时间需晚于当前时刻', // 草稿时刻已过 → 状态行红字（同时禁用确定）
+  scheduleHint: '选择完整日期与时间后生效', // 草稿不完整（未选日期）时状态行弱提示
   schedulePreview: '计划于 %s 执行', // 浮层状态行合法草稿预览模板（%s=YYYY-MM-DD HH:mm）
   schedulePrev: '上一月', // 日历上一月导航按钮 aria-label
   scheduleNext: '下一月', // 日历下一月导航按钮 aria-label
@@ -43,11 +41,9 @@ export const en: Record<PaeCardKey, string> = {
   feedback: 'Rejection feedback',
   feedbackHint: 'Feedback when declining, optional; new independent tasks become new steps',
   discuss: 'Discuss',
-  immediateMode: 'Now',
-  atMode: 'At a time',
+  scheduleNow: 'Now',
   scheduleAtChip: 'Scheduled for %s',
   scheduleClear: 'Clear schedule',
-  scheduleImmediate: 'Starts right after approval',
   scheduleHour: 'Hour',
   scheduleMinute: 'Minute',
   scheduleConfirm: 'OK',

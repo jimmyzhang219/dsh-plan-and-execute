@@ -77,7 +77,7 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 340px; /* 容纳两态分段 + 日历 + 时/分 + 状态行 + 操作行（验收反馈：控件主流化） */
+  width: 340px; /* 容纳日历 + 时/分 + 状态行 + 操作行（验收反馈：控件主流化） */
   padding: 10px 12px;
   background: var(--dsw-specific-input-major, #2a2a2e);
   border: 1px solid var(--dsw-alias-border-l1, currentColor);
@@ -87,31 +87,6 @@ const CSS = `
 /* portal 后浮层脱离 .pae-card 子树：「.pae-card, .pae-card *」的盒模型重置不再命中，
    宿主无全局重置，浮层须自备一份（对齐 .pae-card 体例） */
 .pae-schedule-picker, .pae-schedule-picker * { box-sizing: border-box; }
-/* 两态分段：立即执行 / 指定时间 */
-.pae-schedule-modes {
-  display: flex;
-  gap: 4px;
-  padding: 2px;
-  background: var(--dsw-alias-bg-base, transparent);
-  border: 1px solid var(--dsw-alias-border-l1, currentColor);
-  border-radius: 8px;
-}
-.pae-schedule-mode {
-  flex: 1 1 auto;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, inherit);
-  font-size: 12px;
-  line-height: 18px;
-  cursor: pointer;
-}
-.pae-schedule-mode--active {
-  background: var(--dsw-alias-state-warn-primary, #ffd166);
-  color: var(--dsw-specific-input-major, #2a2a2e);
-  font-weight: 600;
-}
 /* 日历：react-day-picker classNames 全量映射（.pae-rdp-*），无包 css。
    结构：.pae-rdp-months > nav(.pae-rdp-nav) + .pae-rdp-month > caption + table */
 .pae-schedule-calendar .pae-rdp-root { font-size: 13px; }
@@ -251,9 +226,11 @@ const CSS = `
 .pae-schedule-status--err {
   color: var(--dsw-alias-state-error-primary, #e5484d);
 }
+/* 浮层操作行：左下「立即执行」（ghost）与右下「确定」（primary）分居两端 */
 .pae-schedule-picker-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 .pae-body {
