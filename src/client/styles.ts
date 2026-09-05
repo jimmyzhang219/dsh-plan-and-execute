@@ -84,6 +84,9 @@ const CSS = `
   border-radius: 10px;
   box-shadow: var(--dsw-shadow-lv2, none);
 }
+/* portal 后浮层脱离 .pae-card 子树：「.pae-card, .pae-card *」的盒模型重置不再命中，
+   宿主无全局重置，浮层须自备一份（对齐 .pae-card 体例） */
+.pae-schedule-picker, .pae-schedule-picker * { box-sizing: border-box; }
 /* 两态分段：立即执行 / 指定时间 */
 .pae-schedule-modes {
   display: flex;

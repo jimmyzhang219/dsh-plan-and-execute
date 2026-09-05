@@ -278,11 +278,20 @@ export function PaeReviewCard({
       else seedDraft(defaultDraftAt(Date.now()))
     }
   }
-  /** 收起浮层（chip 再点 / 失焦 pointerdown / resize·scroll 共用）：丢弃草稿并清锚点。 */
+  /**
+   * 把焦点归还 chip 按钮：portal 浮层不在文档 Tab 序内，面板元素获得焦点后若直接卸载
+   * 焦点会掉回 body，Tab 续走断裂——各关闭路径收口后统一落回 chip（chip 常驻 DOM，
+   * 同步 focus 即可，无需等重渲染）。
+   */
+  const refocusChip = (): void => {
+    chipRef.current?.querySelector<HTMLButtonElement>('.pae-schedule-toggle')?.focus()
+  }
+  /** 收起浮层（chip 再点 / 失焦 pointerdown / Esc / resize·scroll 共用）：丢弃草稿、清锚点、归还焦点。 */
   const dismissPicker = (): void => {
     setOpen(false)
     setAnchor(null)
     resetDraft()
+    refocusChip()
   }
   /** chip 点击：展开时先测 chip 视口矩形作锚点，再按 when 播种两态与草稿（零后端调用）。 */
   const togglePicker = (): void => {
@@ -331,6 +340,7 @@ export function PaeReviewCard({
     setOpen(false)
     setAnchor(null)
     resetDraft()
+    refocusChip()
     setError(null)
   }
   /** 清除排期（chip ×）：仅本地清 when=null（排期意图在批准时随载荷传达）。 */
@@ -339,6 +349,7 @@ export function PaeReviewCard({
     setOpen(false)
     setAnchor(null)
     resetDraft()
+    refocusChip()
     setError(null)
   }
 
@@ -362,10 +373,25 @@ export function PaeReviewCard({
   }, [open, anchor, mode, draftDay])
 
   /**
-   * 失焦/位移收口：仅浮层打开期间挂监听（关闭即卸载清理，成对 add/remove）。
+   * 打开聚焦：portal 挂载后把焦点移入面板两态分段组的激活按钮（面板不在文档 Tab 序内，
+   * 焦点必须主动迁入，Tab 才能从面板内续走）。仅 open 翻转时执行，日历点选/两态切换
+   * 等后续重渲染不抢焦点。
+   */
+  useLayoutEffect(() => {
+    if (!open) return
+    const group = panelRef.current?.querySelector<HTMLDivElement>('.pae-schedule-modes')
+    const active =
+      group?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ??
+      group?.querySelector<HTMLButtonElement>('button')
+    active?.focus()
+  }, [open])
+
+  /**
+   * 失焦/位移/Esc 收口：仅浮层打开期间挂监听（关闭即卸载清理，成对 add/remove）。
    * pointerdown 用 capture 在 document 先于卡内其他处理器判定；命中面板/chip 内
    * 不关（面板内交互经原生 pointerdown→click 序列，chip 收起由再点负责）。
-   * resize 与任意元素 scroll（capture 捕获不冒泡的 scroll）也收口，防锚点错位。
+   * resize 与任意元素 scroll（capture 捕获不冒泡的 scroll）收口防锚点错位；
+   * keydown Esc（capture）收口并把焦点归还 chip。
    */
   useEffect(() => {
     if (!open) return
@@ -379,12 +405,17 @@ export function PaeReviewCard({
       }
       dismissPicker()
     }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') dismissPicker()
+    }
     const onViewportChange = (): void => dismissPicker()
     document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('resize', onViewportChange)
     window.addEventListener('scroll', onViewportChange, true)
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('resize', onViewportChange)
       window.removeEventListener('scroll', onViewportChange, true)
     }

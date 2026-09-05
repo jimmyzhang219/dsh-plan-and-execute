@@ -379,6 +379,25 @@ describe('执行时间控件', () => {
     fireEvent.scroll(document.body)
     expect(screen.queryByTestId('schedule-picker')).toBeNull()
   })
+
+  it('Esc 关闭浮层：面板卸载、chip aria-expanded 复位、零 settings 写', () => {
+    const update = openPanel()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+    expect(screen.getByRole('button', { name: /^立即执行$/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('打开聚焦两态分段激活按钮；Esc 关闭后焦点归还 chip（Tab 序连续）', () => {
+    openPanel() // 无排期 → 打开即 immediate 态，激活「立即执行」
+    expect(document.activeElement).toBe(screen.getByTestId('schedule-mode-now'))
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    const chip = screen.getByRole('button', { name: /^立即执行$/ })
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+    expect(document.activeElement).toBe(chip)
+  })
 })
 
 describe('PaeReviewCardView', () => {
