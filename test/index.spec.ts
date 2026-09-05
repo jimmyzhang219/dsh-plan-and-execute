@@ -717,7 +717,7 @@ describe('pae-ping 桥接（会话查看脉冲）', () => {
       ),
     }
     userQuestions.ask.mockRejectedValueOnce(new Error('card dismissed'))
-    // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.get('settings')
+    // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.inject(['settings'])
     // 注册命名空间，整体替换会令注册静默跳过、无桥接监听）
     const defaultGet = ctx.get.getMockImplementation()!
     ctx.get.mockImplementation((key: string) =>
@@ -785,7 +785,7 @@ describe('定时排期接线', () => {
         }),
       ),
     }
-    // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.get('settings')
+    // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.inject(['settings'])
     // 注册命名空间，整体替换会令注册静默跳过、无桥接监听）
     const defaultGet = ctx.get.getMockImplementation()!
     ctx.get.mockImplementation((key: string) =>

@@ -407,7 +407,9 @@ export class Orchestrator {
       this.approval?.resolve(plan)
       // 常驻回显卡：resolve 之后同一同步段发起（afterApproval 见 scheduled 早退不启动 run；
       // 弹卡前守卫保证至多一张——到点 fireScheduledRun 先 abort 悬空卡再执行）
-      void this.runScheduledCardLoop(plan, dec.at)
+      // catch 仅防 unhandled rejection：尾随 save（fail-loud）等失败使链 reject 时该
+      // void 无调用方承接（编排器无日志设施，吞掉与文件内既有 .catch(() => {}) 段同型）
+      void this.runScheduledCardLoop(plan, dec.at).catch(() => undefined)
       return { approved: true }
     }
     // 立即执行（现状路径；指定时刻已滑过亦降级至此）
@@ -796,7 +798,6 @@ export class Orchestrator {
     ) {
       return 'dismissed'
     }
-    console.log(`[pae-debug] presentScheduledCard at=${formatScheduleAt(at)} phase=scheduled`)
     const controller = new AbortController()
     this.currentAskAbort = controller
     try {
@@ -906,9 +907,6 @@ export class Orchestrator {
   async reviewScheduledAgain(): Promise<'asked' | 'ignored'> {
     const plan = this.state.plan
     const at = this.state.scheduledAt
-    console.log(
-      `[pae-debug] reviewScheduledAgain phase=${this.state.phase} at=${at ?? ''} card=${this.currentAskAbort !== undefined}`,
-    )
     if (this.state.phase !== 'scheduled' || plan === undefined || at === undefined) return 'ignored'
     if (at <= this.now()) return 'ignored' // 到点/错过由 fire/revive 路径处理，不弹卡
     if (this.currentAskAbort !== undefined) return 'ignored' // 已有悬空卡

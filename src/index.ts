@@ -365,12 +365,8 @@ export function apply(ctx: Context, config: Config): void {
         `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_PING_NS}（会话打开重弹不可用）：${String(error)}`,
       )
     }
-    console.log(
-      `[pae-debug] flags models=${String(modelsNsRegistered)} ping=${String(pingNsRegistered)}`,
-    )
     if (!modelsNsRegistered && !pingNsRegistered) return
     settingsCtx.on('settings/updated', (ns: string, next: unknown) => {
-      console.log(`[pae-debug] TOP ns=${ns}`)
       if (ns === PAE_MODELS_NS) {
         // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
         // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
@@ -433,11 +429,7 @@ export function apply(ctx: Context, config: Config): void {
             (next ?? {}) as Record<string, unknown>,
           )) {
             const orchestrator = bySessionId.get(sessionId)
-            if (orchestrator === undefined) {
-              console.log(`[pae-debug] ping no-orch sid=${sessionId}`)
-              continue
-            }
-            console.log(`[pae-debug] ping parsed=${String(parsePaePing(section))} sid=${sessionId}`)
+            if (orchestrator === undefined) continue
             if (!parsePaePing(section)) continue
             // fire-and-forget：内部收尾（save/run）rejection 在此接住记 warn；
             // 'asked'/'ignored' 结果不消费（只表达「已发起」）
