@@ -9,6 +9,7 @@ import {
   cleanupTempDirs,
   FakeAgent,
   fakeAsk,
+  fakeImageBlock,
   fakeScheduler,
   FakeRevivedSession,
   FakeStorage,
@@ -141,6 +142,51 @@ describe('主执行路径', () => {
     )
     expect(verdict.approved).toBe(false)
     if (!verdict.approved) expect(verdict.error).toContain('粒度太粗')
+  })
+
+  it('带图 begin：任务消息图块在前文字在后，taskImages 落盘；执行期各步锚定消息不含图块', async () => {
+    const img = fakeImageBlock('att-begin')
+    const { orchestrator, agent, storage } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+      {},
+      undefined,
+      undefined,
+      {},
+      [img],
+    )
+    // 任务消息：图块在前、任务文字收尾；kickoff 指令仍纯文字
+    expect(agent.steered[0]!.content).toHaveLength(2)
+    expect(agent.steered[0]!.content[0]).toEqual({ type: 'image', attachment: img.attachment })
+    expect(agent.steered[0]!.content[1]).toMatchObject({ type: 'text' })
+    expect(agent.steered[1]!.content).toHaveLength(1)
+    expect(storage.state?.taskImages).toEqual([img])
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'success', summary: 'A 完成' },
+      1,
+      1,
+    )
+    await vi.waitFor(() => {
+      expect(storage.state?.phase).toBe('completed')
+    })
+    // 执行期锚定/指令消息全部纯文字（步骤按 md 执行为准，不重复上传图）
+    for (const call of agent.session.replaceCalls) {
+      expect(call.message.content.some((b) => b.type === 'image')).toBe(false)
+    }
+    // 带图任务消息首块为图块（无 text），提取文本前先过滤，避免 undefined.includes 抛错
+    const texts = agent.steered
+      .filter((m) => m.content[0]?.type === 'text')
+      .map((m) => (m.content[0] as { text: string }).text)
+    expect(texts.some((t) => t.includes('执行计划第 1/1 步'))).toBe(true)
+    // 无图 begin：不落 taskImages 字段（兼容旧快照）
+    const { storage: plain } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+    )
+    expect(plain.state?.taskImages).toBeUndefined()
   })
 })
 
@@ -1400,10 +1446,11 @@ describe('scheduled 恢复与到点触发', () => {
 describe('voidScheduledByArchive（归档作废排期）', () => {
   it("scheduled（revive 加载、无悬空卡）→ 'cancelled'：终态 aborted、scheduledAt/stepIndex 清、plan 保留、cancel 被调、无 todo/注入", async () => {
     const at = 2_000_000_000_000
-    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator({
-      at,
-      nowMs: at - 60_000,
-    })
+    const { orchestrator, agent, scheduler, storage, askControl } =
+      await buildScheduledOrchestrator({
+        at,
+        nowMs: at - 60_000,
+      })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
     askControl.resolveNext(answer('pae-approve', '批准')) // 批准未改排期 → kept：保持等待、无悬空卡
@@ -1487,10 +1534,11 @@ describe('voidScheduledByArchive（归档作废排期）', () => {
 
   it('悬空常驻卡挂起中归档作废 → abort 后卡答案折叠（不续卡、不执行、无脏写）', async () => {
     const at = 2_000_000_000_000
-    const { orchestrator, agent, scheduler, storage, askControl } = await buildScheduledOrchestrator({
-      at,
-      nowMs: at - 60_000,
-    })
+    const { orchestrator, agent, scheduler, storage, askControl } =
+      await buildScheduledOrchestrator({
+        at,
+        nowMs: at - 60_000,
+      })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1)) // 常驻卡挂起
 

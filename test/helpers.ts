@@ -201,6 +201,7 @@ export async function makeOrchestrator(
   hooks?: ConstructorParameters<typeof Orchestrator>[0]['hooks'],
   storage = new FakeStorage(),
   runtime: { scheduler?: FakeScheduler; now?: () => number } = {},
+  images?: readonly ImageBlock[],
 ) {
   const planDir = await mkdtemp(join(tmpdir(), 'pae-orch-'))
   tempDirs.push(planDir)
@@ -222,7 +223,7 @@ export async function makeOrchestrator(
     ...(runtime.scheduler === undefined ? {} : { scheduler }),
     ...(runtime.now === undefined ? {} : { now: runtime.now }),
   })
-  await orchestrator.begin('示例任务') // begin 清空目录（真实语义），之后模型写步骤文件
+  await orchestrator.begin('示例任务', images) // begin 清空目录（真实语义），之后模型写步骤文件
   for (const step of steps) {
     await writeFile(join(planDir, step.file), `# ${step.title}\n内容`, 'utf8')
   }

@@ -10,6 +10,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
@@ -145,6 +146,8 @@ interface RuntimeState {
   phase: PaePhase | 'none'
   /** 任务文本（用户输入）。 */
   task?: string
+  /** 启动命令携带的任务参考图（耐久 image 块；空/缺省 = 纯文字任务）。 */
+  taskImages?: readonly ImageBlock[]
   /** 计划目录。 */
   planDir?: string
   /** 当前步骤号（1-based）。 */
@@ -266,12 +269,13 @@ export class Orchestrator {
     }
   }
 
-  /** 命令入口：清空旧编排目录、进入规划阶段并注入 kickoff。 */
-  async begin(task: string): Promise<void> {
+  /** 命令入口：清空旧编排目录、进入规划阶段并注入 kickoff；带图时参考图随任务消息锚定。 */
+  async begin(task: string, images?: readonly ImageBlock[]): Promise<void> {
     await resetPlanDir(this.deps.planDir)
     this.deps.hooks?.onActivate?.()
     this.state.phase = 'planning'
     this.state.task = task
+    this.state.taskImages = images !== undefined && images.length > 0 ? [...images] : undefined
     this.state.planDir = this.deps.planDir
     this.state.stepIndex = undefined
     this.state.pausedReason = undefined
@@ -289,7 +293,7 @@ export class Orchestrator {
     // 新编排以整面 replace 锚定任务原文（遮蔽旧会话历史对模型可见的部分；
     // 事件日志与 UI 轨迹保留，同会话二次运行自动隔离），再注入 kickoff 指令
     // （kind='plugin'，轨迹「上下文」行）。锚定与 steer 须同一同步 tick 相邻执行。
-    this.replaceAll(userTaskMessage(task))
+    this.replaceAll(userTaskMessage(task, images))
     this.deps.agent.steer(kickoffInstruction(task, this.deps.planDir))
     this.armApproval()
   }
@@ -1074,6 +1078,7 @@ export class Orchestrator {
   private applyPersisted(persisted: PersistedOrchestratorState): void {
     this.state.phase = persisted.phase
     this.state.task = persisted.task
+    this.state.taskImages = persisted.taskImages
     this.state.planDir = persisted.planDir
     this.state.stepIndex = persisted.stepIndex
     this.state.pausedReason = persisted.pausedReason
