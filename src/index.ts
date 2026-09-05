@@ -338,23 +338,31 @@ export function apply(ctx: Context, config: Config): void {
   //（pae-ping）——两个注册各自独立 try/catch：任一失败（如部署已有同名命名空间）
   // 只降级对应功能，不互相牵连；两通道均不可用时桥接一并跳过（写通道不可用不影响
   // 插件其余功能）。载荷按 sessionId 分键定位编排器，无对应编排器的会话静默跳过（幂等容错）。
+  // settings 为可选服务：cordis 严格属性访问下未 inject 的服务直读会抛
+  // "cannot get property without inject"，须经 ctx.get 取用（与 userQuestions/agents 同款）。
+  // 命名空间注册各自独立 try/catch：任一失败只降级对应功能；服务缺失则桥接整体跳过。
+  const settingsService = ctx.get('settings') as
+    | { register(ns: string, schema: unknown): unknown }
+    | undefined
   let modelsNsRegistered = false
-  try {
-    ctx.settings.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
-    modelsNsRegistered = true
-  } catch (error) {
-    ctx.logger.warn(
-      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
-    )
-  }
   let pingNsRegistered = false
-  try {
-    ctx.settings.register(PAE_PING_NS, PAE_PING_SCHEMA)
-    pingNsRegistered = true
-  } catch (error) {
-    ctx.logger.warn(
-      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_PING_NS}（会话打开重弹不可用）：${String(error)}`,
-    )
+  if (settingsService !== undefined) {
+    try {
+      settingsService.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
+      modelsNsRegistered = true
+    } catch (error) {
+      ctx.logger.warn(
+        `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
+      )
+    }
+    try {
+      settingsService.register(PAE_PING_NS, PAE_PING_SCHEMA)
+      pingNsRegistered = true
+    } catch (error) {
+      ctx.logger.warn(
+        `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_PING_NS}（会话打开重弹不可用）：${String(error)}`,
+      )
+    }
   }
   if (modelsNsRegistered || pingNsRegistered) {
     ctx.on('settings/updated', (ns: string, next: unknown) => {
@@ -369,13 +377,17 @@ export function apply(ctx: Context, config: Config): void {
             const orchestrator = bySessionId.get(sessionId)
             if (orchestrator === undefined) continue
             const parsed = parsePaeModels(section)
+            const llm = ctx.get('llm') as
+              | { resolveCallConfig(c: { provider: string; model: string }): Promise<{ provider: string; model: string }> }
+              | undefined
             const resolved: Record<number, { provider: string; model: string }> = {}
             for (const [stepKey, model] of Object.entries(parsed)) {
               try {
-                const ok = await ctx.llm.resolveCallConfig({
-                  provider: model.provider,
-                  model: model.model,
-                })
+                // llm 服务缺失（可选）时不校验、原样应用（applyStepModels 只做结构校验）
+                const ok =
+                  llm === undefined
+                    ? { provider: model.provider, model: model.model }
+                    : await llm.resolveCallConfig({ provider: model.provider, model: model.model })
                 resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
               } catch (error) {
                 ctx.logger.warn(
@@ -411,15 +423,22 @@ export function apply(ctx: Context, config: Config): void {
             (next ?? {}) as Record<string, unknown>,
           )) {
             const orchestrator = bySessionId.get(sessionId)
-            if (orchestrator === undefined) continue
+            if (orchestrator === undefined) {
+              continue
+            }
             if (!parsePaePing(section)) continue
-            void orchestrator.reviewScheduledAgain().catch((error) => {
-              ctx.logger.warn(
-                `dsh-plan-and-execute: 会话打开重弹失败（session ${sessionId}）：${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              )
-            })
+            // fire-and-forget：内部收尾（save/run）rejection 在此接住记 warn；
+            // 'asked'/'ignored' 结果不消费（只表达「已发起」）
+            void orchestrator
+              .reviewScheduledAgain()
+              .then(() => undefined)
+              .catch((error) => {
+                ctx.logger.warn(
+                  `dsh-plan-and-execute: 会话打开重弹失败（session ${sessionId}）：${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                )
+              })
           }
         })()
       }

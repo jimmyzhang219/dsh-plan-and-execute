@@ -843,6 +843,8 @@ export class Orchestrator {
    * @returns 'asked'=已重弹回显卡；'ignored'=状态不满足。
    */
   async reviewScheduledAgain(): Promise<'asked' | 'ignored'> {
+    console.log(
+    )
     const plan = this.state.plan
     const at = this.state.scheduledAt
     if (this.state.phase !== 'scheduled' || plan === undefined || at === undefined) return 'ignored'
