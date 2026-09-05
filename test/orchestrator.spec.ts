@@ -384,6 +384,39 @@ describe('确认点 / replan / revive', () => {
     expect((last?.content[0] as { text: string }).text).toContain('回到规划阶段')
   })
 
+  it('带图任务暂停选回到计划阶段 → 重锚任务图文消息 + 合并重规划指令（反馈内嵌）', async () => {
+    const img = fakeImageBlock('att-replan')
+    const { orchestrator, agent, storage } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准'), answer('pae-pause', '回到计划阶段', '加一步测试')],
+      {},
+      undefined,
+      undefined,
+      {},
+      [img],
+    )
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'failed', summary: '卡住' },
+      1,
+      1,
+    )
+    await vi.waitFor(() => {
+      expect(storage.state?.phase).toBe('planning')
+    })
+    // 锚定消息 = 任务图文（图块在前），不再用 replanContextMessage 锚定
+    const anchor = agent.session.replaceCalls.at(-1)
+    expect(anchor?.message.content[0]).toEqual({ type: 'image', attachment: img.attachment })
+    expect(anchor?.message.content[1]).toMatchObject({ type: 'text' })
+    // 合并指令：反馈内嵌 + 指令语
+    const last = agent.steered.at(-1)
+    const text = (last?.content[0] as { text: string }).text
+    expect(text).toContain('加一步测试')
+    expect(text).toContain('重新调用 submit_plan 提交审批')
+  })
+
   it('revive：executing 中断 → 断点续跑弹窗，从当前步重注入', async () => {
     const revived = new FakeRevivedSession()
     const { Orchestrator } = await import('../src/orchestrator.ts')
@@ -422,6 +455,61 @@ describe('确认点 / replan / revive', () => {
     )
     await revivePromise
     expect(revived.storage.state?.phase).toBe('completed')
+  })
+
+  it('revive：planning 中断且有 taskImages → 重锚任务图文后注入恢复规划指令', async () => {
+    const img = fakeImageBlock('att-revive')
+    const revived = new FakeRevivedSession()
+    revived.storage.state = {
+      ...revived.storage.state!,
+      phase: 'planning',
+      stepIndex: undefined,
+      plan: undefined,
+      task: '看图改登录',
+      taskImages: [img],
+    }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0)
+    revived.resolveResume(answer('pae-resume', '继续规划'))
+    await revivePromise
+    // 首条注入 = 图文任务锚定（重锚），其后 = 恢复规划指令
+    expect(revived.agent.steered[0]!.content[0]).toEqual({
+      type: 'image',
+      attachment: img.attachment,
+    })
+    expect(revived.agent.steered[1]!.content[0]).toMatchObject({ type: 'text' })
+  })
+
+  it('revive：planning 中断且纯文字任务 → 不重锚（仅注入恢复规划指令，现状行为）', async () => {
+    const revived = new FakeRevivedSession()
+    revived.storage.state = {
+      ...revived.storage.state!,
+      phase: 'planning',
+      stepIndex: undefined,
+      plan: undefined,
+      task: '纯文字任务',
+    }
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const orchestrator = new Orchestrator({
+      agent: revived.agent,
+      ask: revived.ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: revived.planDir,
+      storage: revived.storage,
+    })
+    const revivePromise = orchestrator.revive()
+    await vi.waitFor(() => revived.receivedQuestions.length > 0)
+    revived.resolveResume(answer('pae-resume', '继续规划'))
+    await revivePromise
+    expect(revived.agent.steered).toHaveLength(1)
   })
 })
 

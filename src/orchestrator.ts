@@ -31,6 +31,7 @@ import {
   planSummaryContextMessage,
   recoverInstruction,
   replanContextMessage,
+  replanDetailedInstruction,
   replanInstruction,
   resumePlanningInstruction,
   stepInstruction,
@@ -737,15 +738,24 @@ export class Orchestrator {
     return 'dismissed'
   }
 
-  /** 回到规划阶段：清计划、以整面 replace 锚定反馈上下文、注入 replan 指令、重新挂起审批。 */
+  /** 回到规划阶段：有图任务重锚任务图文消息、无图保持 replanContext 锚定，再注入重规划指令、重新挂起审批。 */
   private async enterReplan(plan: PaePlanPayload): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
     this.state.scheduledAt = undefined
     this.state.stepModels.clear()
     await this.save()
-    this.replaceAll(replanContextMessage(this.lastFeedback, plan))
-    this.deps.agent.steer(replanInstruction(plan.steps.length))
+    const task = this.state.task
+    const images = this.state.taskImages
+    if (task !== undefined && images !== undefined && images.length > 0) {
+      // 图文分支：整面重锚任务图文（模型继续参考原图），反馈+原计划清单内嵌在
+      // 合并指令中（replanDetailedInstruction），与无图分支保持同 tick 相邻语义
+      this.replaceAll(userTaskMessage(task, images))
+      this.deps.agent.steer(replanDetailedInstruction(this.lastFeedback, plan))
+    } else {
+      this.replaceAll(replanContextMessage(this.lastFeedback, plan))
+      this.deps.agent.steer(replanInstruction(plan.steps.length))
+    }
     this.armApproval()
   }
 
@@ -1020,6 +1030,13 @@ export class Orchestrator {
       if (answer === 'dismissed') return
       const label = answer.answers.find((entry) => entry.id === 'pae-resume')?.selected[0]
       if (label === '继续规划') {
+        // 图文任务条件重锚：仅 taskImages 非空时整面重锚任务图文（补偿 compaction/
+        // 重启丢图）；纯文字任务维持现状（不遮蔽重启前用户留在 surface 的补充消息）
+        const task = this.state.task
+        const images = this.state.taskImages
+        if (task !== undefined && images !== undefined && images.length > 0) {
+          this.replaceAll(userTaskMessage(task, images))
+        }
         this.deps.agent.steer(resumePlanningInstruction())
         this.armApproval()
       } else if (label === PAUSE_TERMINATE) {
