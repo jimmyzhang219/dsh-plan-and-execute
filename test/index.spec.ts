@@ -700,10 +700,11 @@ describe('pae-ping 桥接（会话查看脉冲）', () => {
     expect(settingsListenerOf(ctx)).toBeDefined()
   })
 
-  it('编排器在场且 scheduled 未到点 → 桥接调 reviewScheduledAgain（经 userQuestions 二次弹回显卡）', async () => {
+  it('scheduled 等待期弹卡被 dismiss → pae-ping 桥接重弹回显卡（dismiss 后 ping 重弹链路）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    // 可记录式 userQuestions 假服务：ask 即刻批准（批准无载荷 = 保持原排期）
+    // 可记录式 userQuestions 假服务：ask#1（revive 弹卡）以拒绝模拟用户关闭/丢卡 →
+    // 编排器折叠为 dismissed（保持排期等待）；之后的 ask（ping 重弹）即刻批准（无载荷 = 保持）
     const userQuestions = {
       ask: vi.fn(
         async (_options: {
@@ -715,6 +716,7 @@ describe('pae-ping 桥接（会话查看脉冲）', () => {
         }),
       ),
     }
+    userQuestions.ask.mockRejectedValueOnce(new Error('card dismissed'))
     // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.get('settings')
     // 注册命名空间，整体替换会令注册静默跳过、无桥接监听）
     const defaultGet = ctx.get.getMockImplementation()!
@@ -728,11 +730,11 @@ describe('pae-ping 桥接（会话查看脉冲）', () => {
     })
     await writeFile(join(cwd, '.pae', 'sess-1', 'a.md'), '# A\n内容', 'utf8')
     const agent = fakeAgent('none')
-    await fireCreated(ctx, agent) // revive → 回显卡 ask#1（批准后 scheduled 保持）
+    await fireCreated(ctx, agent) // revive → 回显卡 ask#1（dismiss → 保持排期等待、不再弹卡）
     await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(1))
+    // 无卡悬空时 ping 才重弹：dismiss 后走 reviewScheduledAgain → 经 userQuestions 弹 ask#2
     const listener = settingsListenerOf(ctx)!
     await listener('pae-ping', { 'sess-1': { t: Date.now() } }, {}, 'user')
-    // 二次 ask（intent plan-review + detail 含执行排期行）→ reviewScheduledAgain 已发起重弹
     await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(2))
     const second = userQuestions.ask.mock.calls[1]![0]!
     expect(second.questions[0]).toMatchObject({ intent: { kind: 'plan-review', approve: '批准' } })
