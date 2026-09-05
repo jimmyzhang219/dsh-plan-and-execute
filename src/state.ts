@@ -22,6 +22,14 @@ export const PAE_PLUGIN = 'dsh-plan-and-execute'
  */
 export const PAE_MODELS_NS = 'pae-step-models' as SettingsNamespace
 
+/**
+ * 会话查看脉冲的 settings 命名空间名（全局用户配置，按 sessionId 分键）。
+ * client half 在会话每次被查看（含无 pending 的打开/刷新重挂载）时写一次
+ * 时间戳脉冲，宿主 settings.ts 桥接据此对 scheduled 等待期会话重弹回显卡。
+ * 定义在本文件（无运行时依赖）的原因同 PAE_MODELS_NS（宿主与 client 共用）。
+ */
+export const PAE_PING_NS = 'pae-ping' as SettingsNamespace
+
 /** 编排阶段：planning（规划）→ scheduled（已批准待定时执行）→ executing（执行，可暂停）→ completed/aborted（终态）。 */
 export type PaePhase = 'planning' | 'scheduled' | 'executing' | 'paused' | 'completed' | 'aborted'
 /** 暂停原因：确认点等待用户 / 步骤失败 / 用户终止。 */

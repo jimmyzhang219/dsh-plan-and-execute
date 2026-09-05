@@ -7,7 +7,7 @@ import type { AskUserQuestionAnswer } from '@deepseek-ai/dsh-user-questions'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PersistedOrchestratorState } from '../src/persist.ts'
-import type { PaePhase } from '../src/state.ts'
+import { PAE_MODELS_NS, PAE_PING_NS, type PaePhase } from '../src/state.ts'
 
 /** 最小假 ctx：捕获注册项。inject 同步执行 setup 并回传 ctx 本体。 */
 function fakeCtx() {
@@ -687,6 +687,65 @@ describe('settings/updated 桥接', () => {
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('settings 命名空间注册失败'),
     )
+  })
+})
+
+describe('pae-ping 桥接（会话查看脉冲）', () => {
+  it('注册 pae-ping 命名空间（models 之后各自独立 try）并挂 settings/updated 桥接', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const registered = (ctx.settings.register as Mock).mock.calls.map((call) => call[0])
+    expect(registered).toEqual([PAE_MODELS_NS, PAE_PING_NS])
+    expect(settingsListenerOf(ctx)).toBeDefined()
+  })
+
+  it('编排器在场且 scheduled 未到点 → 桥接调 reviewScheduledAgain（经 userQuestions 二次弹回显卡）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    // 可记录式 userQuestions 假服务：ask 即刻批准（批准无载荷 = 保持原排期）
+    const userQuestions = {
+      ask: vi.fn(
+        async (_options: {
+          questions: unknown[]
+          agent: unknown
+          signal?: AbortSignal
+        }): Promise<AskUserQuestionAnswer> => ({
+          answers: [{ id: 'pae-approve', selected: ['批准'], custom: '' }],
+        }),
+      ),
+    }
+    ctx.get.mockImplementation((key: string) =>
+      key === 'userQuestions' ? userQuestions : undefined,
+    )
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    await seedState('scheduled', {
+      scheduledAt: Date.now() + 60_000,
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    await writeFile(join(cwd, '.pae', 'sess-1', 'a.md'), '# A\n内容', 'utf8')
+    const agent = fakeAgent('none')
+    await fireCreated(ctx, agent) // revive → 回显卡 ask#1（批准后 scheduled 保持）
+    await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(1))
+    const listener = settingsListenerOf(ctx)!
+    await listener('pae-ping', { 'sess-1': { t: Date.now() } }, {}, 'user')
+    // 二次 ask（intent plan-review + detail 含执行排期行）→ reviewScheduledAgain 已发起重弹
+    await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(2))
+    const second = userQuestions.ask.mock.calls[1]![0]!
+    expect(second.questions[0]).toMatchObject({ intent: { kind: 'plan-review', approve: '批准' } })
+    expect((second.questions[0] as { detail?: string }).detail).toContain('执行排期：')
+  })
+
+  it('无对应编排器（sessionId 未注册）→ 静默跳过不抛', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const listener = settingsListenerOf(ctx)!
+    // 从未 fireCreated：bySessionId 无该 session → 循环内 continue，监听器正常 resolve
+    await expect(
+      listener('pae-ping', { 'ghost-sess': { t: Date.now() } }, {}, 'user'),
+    ).resolves.toBeUndefined()
+    await expect(listener('pae-ping', undefined, {}, 'user')).resolves.toBeUndefined()
   })
 })
 

@@ -25,7 +25,14 @@ import type {} from '@deepseek-ai/dsh-tool-todo'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
 import { fileStorage } from './persist.ts'
 import { ScheduleRegistry } from './schedule.ts'
-import { PAE_MODELS_NS, PAE_MODELS_SCHEMA, parsePaeModels } from './settings.ts'
+import {
+  PAE_MODELS_NS,
+  PAE_MODELS_SCHEMA,
+  parsePaeModels,
+  PAE_PING_NS,
+  PAE_PING_SCHEMA,
+  parsePaePing,
+} from './settings.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
 import { isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
@@ -327,60 +334,97 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
 
-  // —— settings 命名空间：审批卡模型下拉静默写通道 + settings/updated 桥接 ——
-  // 注册失败（如部署已有同名命名空间）则桥接一并跳过（写通道不可用不影响插件其余功能）；
-  // 载荷按 sessionId 分键定位编排器，无对应编排器的会话静默跳过（幂等容错）。
+  // —— settings 命名空间：模型下拉静默写（pae-step-models）+ 会话查看脉冲
+  //（pae-ping）——两个注册各自独立 try/catch：任一失败（如部署已有同名命名空间）
+  // 只降级对应功能，不互相牵连；两通道均不可用时桥接一并跳过（写通道不可用不影响
+  // 插件其余功能）。载荷按 sessionId 分键定位编排器，无对应编排器的会话静默跳过（幂等容错）。
+  let modelsNsRegistered = false
   try {
     ctx.settings.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
-    ctx.on('settings/updated', (ns: string, next: unknown) => {
-      if (ns !== PAE_MODELS_NS) return
-      // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
-      // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
-      // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。
-      return (async () => {
-        for (const [sessionId, section] of Object.entries(
-          (next ?? {}) as Record<string, unknown>,
-        )) {
-          const orchestrator = bySessionId.get(sessionId)
-          if (orchestrator === undefined) continue
-          const parsed = parsePaeModels(section)
-          const resolved: Record<number, { provider: string; model: string }> = {}
-          for (const [stepKey, model] of Object.entries(parsed)) {
-            try {
-              const ok = await ctx.llm.resolveCallConfig({
-                provider: model.provider,
-                model: model.model,
-              })
-              resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
-            } catch (error) {
-              ctx.logger.warn(
-                `dsh-plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              )
-            }
-          }
-          // 解析出步骤但全部 resolve 失败：视为瞬态不可用，跳过本次应用
-          //（applyStepModels 整体替换语义下空映射会清空既有选择）。
-          const parsedEntries = Object.keys(parsed).length
-          const resolvedEntries = Object.keys(resolved).length
-          if (parsedEntries > 0 && resolvedEntries === 0) {
-            ctx.logger.warn(
-              'dsh-plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
-            )
-            continue
-          }
-          const result = await orchestrator.applyStepModels(resolved)
-          if (!result.ok) {
-            ctx.logger.warn(`dsh-plan-and-execute: 应用步骤模型失败：${result.error}`)
-          }
-        }
-      })()
-    })
+    modelsNsRegistered = true
   } catch (error) {
     ctx.logger.warn(
       `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
     )
+  }
+  let pingNsRegistered = false
+  try {
+    ctx.settings.register(PAE_PING_NS, PAE_PING_SCHEMA)
+    pingNsRegistered = true
+  } catch (error) {
+    ctx.logger.warn(
+      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_PING_NS}（会话打开重弹不可用）：${String(error)}`,
+    )
+  }
+  if (modelsNsRegistered || pingNsRegistered) {
+    ctx.on('settings/updated', (ns: string, next: unknown) => {
+      if (ns === PAE_MODELS_NS) {
+        // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
+        // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
+        // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。
+        return (async () => {
+          for (const [sessionId, section] of Object.entries(
+            (next ?? {}) as Record<string, unknown>,
+          )) {
+            const orchestrator = bySessionId.get(sessionId)
+            if (orchestrator === undefined) continue
+            const parsed = parsePaeModels(section)
+            const resolved: Record<number, { provider: string; model: string }> = {}
+            for (const [stepKey, model] of Object.entries(parsed)) {
+              try {
+                const ok = await ctx.llm.resolveCallConfig({
+                  provider: model.provider,
+                  model: model.model,
+                })
+                resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
+              } catch (error) {
+                ctx.logger.warn(
+                  `dsh-plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                )
+              }
+            }
+            // 解析出步骤但全部 resolve 失败：视为瞬态不可用，跳过本次应用
+            //（applyStepModels 整体替换语义下空映射会清空既有选择）。
+            const parsedEntries = Object.keys(parsed).length
+            const resolvedEntries = Object.keys(resolved).length
+            if (parsedEntries > 0 && resolvedEntries === 0) {
+              ctx.logger.warn(
+                'dsh-plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
+              )
+              continue
+            }
+            const result = await orchestrator.applyStepModels(resolved)
+            if (!result.ok) {
+              ctx.logger.warn(`dsh-plan-and-execute: 应用步骤模型失败：${result.error}`)
+            }
+          }
+        })()
+      }
+      if (ns === PAE_PING_NS) {
+        // —— 会话查看脉冲分支：合法脉冲即对 scheduled 等待期会话重弹回显卡。
+        // reviewScheduledAgain 内部 fire-and-forget（不 await、不阻塞本次监听）；
+        // 其 rejection 在此接住记 warn，避免 unhandled rejection。 ——
+        return (async () => {
+          for (const [sessionId, section] of Object.entries(
+            (next ?? {}) as Record<string, unknown>,
+          )) {
+            const orchestrator = bySessionId.get(sessionId)
+            if (orchestrator === undefined) continue
+            if (!parsePaePing(section)) continue
+            void orchestrator.reviewScheduledAgain().catch((error) => {
+              ctx.logger.warn(
+                `dsh-plan-and-execute: 会话打开重弹失败（session ${sessionId}）：${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              )
+            })
+          }
+        })()
+      }
+      return undefined
+    })
   }
 
   // —— 阶段 prompt sections（读编排器内存态；未加载时渲染空）——

@@ -1187,6 +1187,105 @@ describe('scheduled 恢复与到点触发', () => {
     expect(storage2.state?.phase).toBe('executing')
   })
 
+  describe('reviewScheduledAgain（会话打开重弹）', () => {
+    it("scheduled 未到点且无悬空卡 → 'asked'：重 arm + 复弹回显卡（receivedQuestions+1）", async () => {
+      const at = 2_000_000_000_000
+      const { orchestrator, scheduler, storage, askControl } = await buildScheduledOrchestrator({
+        at,
+        nowMs: at - 60_000,
+      })
+      // 先经 revive 恢复（scheduled future 弹卡）；消费其卡后再测无悬空路径
+      const revivePromise = orchestrator.revive()
+      await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+      askControl.resolveNext(answer('pae-approve', '批准'))
+      await revivePromise
+      expect(storage.state?.phase).toBe('scheduled')
+      expect(askControl.receivedQuestions).toHaveLength(1)
+
+      expect(await orchestrator.reviewScheduledAgain()).toBe('asked')
+      await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2))
+      const question = askControl.receivedQuestions[1]![0]!
+      expect(question.intent).toEqual({ kind: 'plan-review', approve: '批准' })
+      expect(question.detail).toContain('执行排期：')
+      expect(scheduler.arm).toHaveBeenLastCalledWith(at) // 重 arm（幂等替换）
+      askControl.resolveNext(answer('pae-approve', '批准')) // 收尾：保持原排期
+      expect(storage.state?.phase).toBe('scheduled')
+      expect(storage.state?.scheduledAt).toBe(at)
+    })
+
+    it('已有悬空回显卡（先 revive 未答）→ ignored 不叠卡', async () => {
+      const at = 2_000_000_000_000
+      const { orchestrator, askControl, scheduler } = await buildScheduledOrchestrator({
+        at,
+        nowMs: at - 60_000,
+      })
+      const revivePromise = orchestrator.revive()
+      await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
+      expect(await orchestrator.reviewScheduledAgain()).toBe('ignored')
+      expect(askControl.receivedQuestions).toHaveLength(1) // 未叠第二张卡
+      expect(scheduler.arm).toHaveBeenCalledTimes(1) // 仅 revive 前置 arm，未重复 arm
+      askControl.resolveNext(answer('pae-approve', '批准'))
+      await revivePromise
+    })
+
+    it('scheduled 已到点（错过 timer）→ ignored（补执行路径不弹卡）', async () => {
+      const at = 2_000_000_000_000
+      const { orchestrator, askControl } = await buildScheduledOrchestrator({ at, nowMs: at + 1 })
+      // revive 的 overdue 分支自动补执行（phase 迁出 scheduled、无任何问询）
+      await orchestrator.revive()
+      expect(orchestrator.snapshot().phase).toBe('executing')
+      expect(askControl.receivedQuestions).toHaveLength(0)
+      expect(await orchestrator.reviewScheduledAgain()).toBe('ignored')
+    })
+
+    it('executing（执行中）→ ignored，执行期不显示审批卡', async () => {
+      const { orchestrator } = await makeOrchestrator(
+        [{ file: 'a.md', title: 'A' }],
+        [answer('pae-approve', '批准')],
+      )
+      expect(orchestrator.snapshot().phase).toBe('executing')
+      expect(await orchestrator.reviewScheduledAgain()).toBe('ignored')
+    })
+
+    it('paused → ignored（恢复弹窗挂起中亦不重弹回显卡）', async () => {
+      const revived = new FakeRevivedSession()
+      revived.storage.state = {
+        ...revived.storage.state!,
+        phase: 'paused',
+        pausedReason: 'failure',
+      }
+      const { Orchestrator } = await import('../src/orchestrator.ts')
+      const orchestrator = new Orchestrator({
+        agent: revived.agent,
+        ask: revived.ask,
+        config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+        planDir: revived.planDir,
+        storage: revived.storage,
+      })
+      const revivePromise = orchestrator.revive()
+      await vi.waitFor(() => expect(revived.receivedQuestions.length).toBe(1)) // 暂停弹窗挂起
+      expect(await orchestrator.reviewScheduledAgain()).toBe('ignored')
+      expect(revived.receivedQuestions).toHaveLength(1)
+      revived.resolveResume(answer('pae-pause', '终止'))
+      await revivePromise
+    })
+
+    it('completed（终态）→ ignored', async () => {
+      const revived = new FakeRevivedSession()
+      revived.storage.state = { ...revived.storage.state!, phase: 'completed' }
+      const { Orchestrator } = await import('../src/orchestrator.ts')
+      const orchestrator = new Orchestrator({
+        agent: revived.agent,
+        ask: revived.ask,
+        config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+        planDir: revived.planDir,
+        storage: revived.storage,
+      })
+      await orchestrator.revive()
+      expect(await orchestrator.reviewScheduledAgain()).toBe('ignored')
+    })
+  })
+
   it('回显卡驳回（回规划）：下一次 submitPlan 批准无载荷 → 立即执行', async () => {
     const at = 2_000_000_000_000
     const { orchestrator, planDir, scheduler, storage, askControl } =

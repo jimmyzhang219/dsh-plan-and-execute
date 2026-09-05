@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parsePaeModels, PAE_MODELS_NS } from '../src/settings.ts'
+import { PAE_PING_NS, parsePaeModels, parsePaePing, PAE_MODELS_NS } from '../src/settings.ts'
 
 describe('parsePaeModels', () => {
   it('合法载荷解析为 {步骤号: {provider, model}}', () => {
@@ -25,5 +25,23 @@ describe('parsePaeModels', () => {
   })
   it('命名空间常量', () => {
     expect(PAE_MODELS_NS).toBe('pae-step-models')
+  })
+})
+
+describe('parsePaePing', () => {
+  it('对象且 t 为有限数 → true（脉冲存在性语义）', () => {
+    expect(parsePaePing({ t: 1_750_000_000_000 })).toBe(true)
+    expect(parsePaePing({ t: 0 })).toBe(true)
+  })
+  it('非对象 / t 缺失 / t 非有限数 → false（不抛）', () => {
+    expect(parsePaePing(null)).toBe(false)
+    expect(parsePaePing('x')).toBe(false)
+    expect(parsePaePing({})).toBe(false)
+    expect(parsePaePing({ t: 'x' })).toBe(false)
+    expect(parsePaePing({ t: Number.NaN })).toBe(false)
+    expect(parsePaePing({ t: Number.POSITIVE_INFINITY })).toBe(false)
+  })
+  it('命名空间常量', () => {
+    expect(PAE_PING_NS).toBe('pae-ping')
   })
 })

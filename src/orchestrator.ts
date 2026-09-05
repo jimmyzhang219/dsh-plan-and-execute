@@ -814,6 +814,44 @@ export class Orchestrator {
     }
   }
 
+  /** scheduled 未到点：重 arm + 复弹回显卡 + 按选择收尾（revive 与会话打开重弹共用）。 */
+  private async resumeScheduledFuture(plan: PaePlanPayload, at: number): Promise<void> {
+    this.deps.scheduler?.arm(at)
+    const choice = await this.askScheduledReview(plan, at)
+    if (choice === 'replan') {
+      this.deps.scheduler?.cancel()
+      this.state.scheduledAt = undefined
+      this.lastFeedback = '用户取消了已排定的执行。可调整步骤文件后重新提交。'
+      return this.enterReplan(plan)
+    }
+    if (choice === 'now') {
+      this.deps.scheduler?.cancel()
+      this.state.scheduledAt = undefined
+      this.state.phase = 'executing'
+      this.state.stepIndex = 0
+      await this.save()
+      this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
+      void this.run(plan, 1)
+      return
+    }
+    // 're-approve'（保持/替换）与 'dismissed'（关闭保持）无需动作
+  }
+
+  /**
+   * 会话被查看/重开时调用（client ping 桥接）：scheduled 且未到点且当前无悬空
+   * 回显卡才重弹；否则忽略（含 executing/paused——执行中不显示审批卡）。
+   * @returns 'asked'=已重弹回显卡；'ignored'=状态不满足。
+   */
+  async reviewScheduledAgain(): Promise<'asked' | 'ignored'> {
+    const plan = this.state.plan
+    const at = this.state.scheduledAt
+    if (this.state.phase !== 'scheduled' || plan === undefined || at === undefined) return 'ignored'
+    if (at <= this.now()) return 'ignored' // 到点/错过由 fire/revive 路径处理，不弹卡
+    if (this.currentAskAbort !== undefined) return 'ignored' // 已有悬空卡
+    void this.resumeScheduledFuture(plan, at)
+    return 'asked'
+  }
+
   /**
    * 恢复入口（agent/created 重建、或 paused 态命令重入）。先加载持久化
    * 状态，再按折叠状态弹对应交互并续跑；driver 由本方法自身充当。
@@ -845,26 +883,8 @@ export class Orchestrator {
         void this.run(plan, 1)
         return
       }
-      // 排期未到：重 arm（幂等替换）+ 复弹审批卡（可修改执行时间后批准）
-      this.deps.scheduler?.arm(at)
-      const choice = await this.askScheduledReview(plan, at)
-      if (choice === 'replan') {
-        this.deps.scheduler?.cancel()
-        this.state.scheduledAt = undefined
-        this.lastFeedback = '用户取消了已排定的执行。可调整步骤文件后重新提交。'
-        return this.enterReplan(plan)
-      }
-      if (choice === 'now') {
-        this.deps.scheduler?.cancel()
-        this.state.scheduledAt = undefined
-        this.state.phase = 'executing'
-        this.state.stepIndex = 0
-        await this.save()
-        this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
-        void this.run(plan, 1)
-        return
-      }
-      return // 're-approve'（保持/已替换排期）与 'dismissed'（卡关闭，原排期继续）均无需动作
+      // 排期未到：重 arm + 复弹审批卡（revive 与会话打开重弹共用 resumeScheduledFuture 收口）
+      return this.resumeScheduledFuture(plan, at)
     }
     if (folded.phase === 'paused') {
       const reason = folded.pausedReason ?? 'failure'
