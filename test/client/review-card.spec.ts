@@ -3,6 +3,7 @@ import {
   buildSettingsPatch,
   encodeApprovalSchedule,
   isPlanReviewPending,
+  nextFullHour,
   parsePlanDetail,
   parseScheduleAt,
   placeSchedulePicker,
@@ -109,6 +110,29 @@ describe('parsePlanDetail 排期行', () => {
       planDir: '/tmp/x',
       steps: [{ file: 'a.md', title: 'A' }],
     })
+  })
+})
+
+describe('nextFullHour', () => {
+  // 两侧都以相同本地 Date 构造 → 期望值无时区/DST 漂移（构造溢出由 Date 归一化保持一致）
+  const at = (y: number, mo: number, d: number, h: number, mi: number, s = 0, ms = 0): number =>
+    new Date(y, mo, d, h, mi, s, ms).getTime()
+  it('非整点 → 向上取整到下一整点（分/秒/毫秒归零）', () => {
+    expect(nextFullHour(at(2026, 8, 5, 9, 23, 45))).toBe(at(2026, 8, 5, 10, 0, 0))
+    expect(nextFullHour(at(2026, 8, 5, 9, 59, 59, 999))).toBe(at(2026, 8, 5, 10, 0, 0))
+  })
+  it('恰在整点 → 顺延一小时（结果必严格晚于 now）', () => {
+    expect(nextFullHour(at(2026, 8, 5, 9, 0, 0))).toBe(at(2026, 8, 5, 10, 0, 0))
+  })
+  it('整点后不足一分（毫秒级）同样顺延到下一整点', () => {
+    expect(nextFullHour(at(2026, 8, 5, 9, 0, 0, 1))).toBe(at(2026, 8, 5, 10, 0, 0))
+  })
+  it('跨天自动进次日零点', () => {
+    expect(nextFullHour(at(2026, 8, 5, 23, 20))).toBe(at(2026, 8, 6, 0, 0, 0))
+  })
+  it('结果恒晚于输入', () => {
+    const now = at(2026, 8, 5, 12, 30)
+    expect(nextFullHour(now)).toBeGreaterThan(now)
   })
 })
 

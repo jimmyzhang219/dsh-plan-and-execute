@@ -4,13 +4,20 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import {
   PaeReviewCard,
   PaeReviewCardView,
+  resetPingCache,
   type PaeReviewCardProps,
 } from '../../src/client/PaeReviewCard.tsx'
-import { PAE_MODELS_NS } from '../../src/state.ts'
+import { nextFullHour } from '../../src/client/review-card.ts'
+import { PAE_MODELS_NS, PAE_PING_NS } from '../../src/state.ts'
 import { zh } from '../../src/client/locale.ts'
 
 // vitest 未开 globals：显式 cleanup 避免跨用例 DOM 累积（与 plan-card-render.spec.tsx 一致）。
-afterEach(cleanup)
+// ping 限频 map 为模块态（页面生命周期内存）：用例间清理保持确定性；假 Date 一律还原。
+afterEach(() => {
+  cleanup()
+  resetPingCache()
+  vi.useRealTimers()
+})
 
 const base: PaeReviewCardProps = {
   sessionId: 'sess-1',
@@ -179,7 +186,11 @@ describe('执行时间控件', () => {
   const captionOf = (): string =>
     pickerEl().querySelector('.pae-rdp-caption_label')?.textContent ?? ''
 
-  it('打开（无排期）：单页时间设置——无两态分段，日历 + 时/分直接同现；日期未选中 → 确定禁用；零 settings 写', () => {
+  it('打开（无排期）：单页时间设置——默认预选下一整点（日/时/分齐备）→ 绿预览 + 确定可用；直接确定提交草稿；零 settings 写', async () => {
+    // 冻结系统时刻（仅假 Date、真 timer：RTL waitFor 不受影响），跨整点断言可精确比对
+    vi.useFakeTimers({ now: new Date(2026, 8, 5, 9, 23, 45), toFake: ['Date'] })
+    const expected = nextFullHour(new Date(2026, 8, 5, 9, 23, 45).getTime())
+    const expectedDate = new Date(expected)
     const update = openPanel()
     const panel = pickerEl()
     // 分段已删：浮层内无 role=group 组、无 schedule-mode-* 分段按钮
@@ -189,14 +200,29 @@ describe('执行时间控件', () => {
     // 单页：日历与时/分 select 开面板即同现（无需先切「指定时间」态）
     expect(within(panel).getByTestId('schedule-calendar')).toBeTruthy()
     expect(panel.querySelector('.pae-rdp-table')).toBeTruthy()
-    expect(captionOf()).toMatch(/^\d{4}年\d{1,2}月$/) // 中文 caption（当前展示月）
+    expect(captionOf()).toBe(`${expectedDate.getFullYear()}年${expectedDate.getMonth() + 1}月`)
     const hour = within(panel).getByLabelText('scheduleHour') as HTMLSelectElement
     const minute = within(panel).getByLabelText('scheduleMinute') as HTMLSelectElement
     expect(hour.options).toHaveLength(24)
     expect(minute.options).toHaveLength(60)
-    // 无排期：日期初始不选中 → 无完整时刻 → 弱提示 + 确定禁用（防随手确定误排期）
-    expect(statusText()).toBe(zh.scheduleHint)
-    expect(commitBtn().disabled).toBe(true)
+    // 无排期：打开即默认预选下一整点草稿——日历选中该日、时/分对齐 → 完整未来时刻
+    const selected = panel.querySelector('.pae-rdp-day_selected')
+    expect(selected?.getAttribute('data-day')).toBe(isoDay(expectedDate))
+    expect(Number(hour.value)).toBe(expectedDate.getHours())
+    expect(Number(minute.value)).toBe(0)
+    expect(statusText()).toBe(previewOf(expected)) // 绿预览
+    expect(commitBtn().disabled).toBe(false) // 打开即合法 → 确定可用（不再需先点选日期）
+    expect(update).not.toHaveBeenCalled()
+    // 直接「确定」→ 提交下一整点草稿；批准携带 paeSchedule:at:<草稿>（精确逐字）
+    fireEvent.click(commitBtn())
+    await waitFor(() => expect(screen.queryByTestId('schedule-picker')).toBeNull())
+    expect(screen.getByRole('button', { name: previewOf(expected) })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '批准' }))
+    await waitFor(() => {
+      const answerMock = base.pending.answer as ReturnType<typeof vi.fn>
+      const payload = answerMock.mock.calls.at(-1)![0] as { answers: Array<{ custom?: string }> }
+      expect(payload.answers[0]!.custom).toBe(`paeSchedule:at:${expected}`)
+    })
     expect(update).not.toHaveBeenCalled()
   })
 
@@ -527,5 +553,48 @@ describe('PaeReviewCardView', () => {
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'approve' })).toBeTruthy())
     expect(screen.queryByRole('button', { name: /openStep/ })).toBeNull()
+  })
+
+  describe('会话查看脉冲（client ping）', () => {
+    it('打开会话（无 pending）→ 发一次 pae-ping settings.update；同 session 限频内不重发；异 session 各自发送；窗口过后再发', async () => {
+      resetPingCache()
+      const updateSpy = viewInject.settingsRemote.update
+      updateSpy.mockClear() // 本用例内以绝对次数断言：先清历史
+      const t0 = 1_700_000_000_000
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0)
+      // update spy 无入参声明 → mock.calls 元素为 [] 元组，先放宽为 unknown[] 再筛 ns
+      const pingCalls = (): unknown[][] =>
+        (updateSpy.mock.calls as unknown[][]).filter((call) => call[0] === PAE_PING_NS)
+      /** 挂载 PaeReviewCardView（无 pending → selector 返回 null，effect 仍照跑）。 */
+      const mountView = (session: string): ReturnType<typeof render> =>
+        render(
+          <PaeReviewCardView
+            sessionId={session}
+            pendingInteraction={{ kind: 'question', key: 'k' }} // 结构判定不过 → 无卡
+            t={(key: string) => key}
+            {...viewInject}
+          />,
+        )
+      const first = mountView('sess-1')
+      expect(first.container.firstChild).toBeNull() // 无 pending 不渲染卡片
+      await waitFor(() => expect(pingCalls()).toHaveLength(1))
+      expect(pingCalls()[0]).toEqual([PAE_PING_NS, { 'sess-1': { t: t0 } }, undefined])
+      // 同 session 重新挂载（10s 限频窗口内）→ 不重发
+      first.unmount()
+      mountView('sess-1')
+      expect(pingCalls()).toHaveLength(1)
+      // 异 session → 各自独立发送
+      const second = mountView('sess-2')
+      await waitFor(() => expect(pingCalls()).toHaveLength(2))
+      expect(pingCalls()[1]).toEqual([PAE_PING_NS, { 'sess-2': { t: t0 } }, undefined])
+      second.unmount()
+      // 限频窗口（10s）过后同 session 再次挂载 → 重发
+      nowSpy.mockReturnValue(t0 + 10_001)
+      const third = mountView('sess-1')
+      await waitFor(() => expect(pingCalls()).toHaveLength(3))
+      expect(pingCalls()[2]).toEqual([PAE_PING_NS, { 'sess-1': { t: t0 + 10_001 } }, undefined])
+      third.unmount()
+      nowSpy.mockRestore()
+    })
   })
 })

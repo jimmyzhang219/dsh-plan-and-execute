@@ -29,11 +29,12 @@ import { DayPicker } from 'react-day-picker'
 import type { CaptionLabelProps, WeekdayProps } from 'react-day-picker'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import { flattenCatalog, optionKey } from './plan-card.ts'
-import { PAE_MODELS_NS } from '../state.ts'
+import { PAE_MODELS_NS, PAE_PING_NS } from '../state.ts'
 import {
   buildSettingsPatch,
   encodeApprovalSchedule,
   isPlanReviewPending,
+  nextFullHour,
   parsePlanDetail,
   placeSchedulePicker,
   questionView,
@@ -41,6 +42,18 @@ import {
   type PickerPlacement,
 } from './review-card.ts'
 import { zh as zhTexts, type NS } from './locale.ts'
+
+/** 会话查看脉冲限频间隔：同一会话 10s 内至多发一次（空闲无渲染则天然不重发）。 */
+const PING_INTERVAL_MS = 10_000
+/** 已发 ping 的会话 → 上次发送时刻（module 级去重限频；页面生命周期内存，刷新即空）。 */
+const pingedAt = new Map<string, number>()
+
+/**
+ * 清空 ping 限频缓存（仅供测试：render spec 用例间隔离模块态；生产无调用方）。
+ */
+export function resetPingCache(): void {
+  pingedAt.clear()
+}
 
 /** 中文星期单字（数组下标 = Date.getDay()：0=周日 → 「日」…6=周六 → 「六」）。 */
 const ZH_WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
@@ -129,18 +142,6 @@ function composeAt(day: Date | undefined, hour: number, minute: number): number 
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute).getTime()
 }
 
-/**
- * 无排期草稿默认时/分：now+1h 截断到整点（:00）——09:23→10:00；恰在整点也顺延一小时
- * （10:00:00→11:00），保证组合必晚于当前时刻（跨天进位由 Date 构造自然处理）。
- * @param now - 当前时刻（epoch ms）。
- * @returns 下一整点的时与分（分恒为 0）。
- */
-function defaultDraftClock(now: number): { hour: number; minute: number } {
-  const next = new Date(now + 3_600_000)
-  next.setMinutes(0, 0, 0)
-  return { hour: next.getHours(), minute: next.getMinutes() }
-}
-
 export interface PaeReviewCardProps {
   /** 会话标识（与宿主 agent.id 同源；空串时跳过模型选择静默写）。 */
   readonly sessionId: string
@@ -201,7 +202,8 @@ export function PaeReviewCard({
   const chipRef = useRef<HTMLSpanElement | null>(null)
   /** 浮层面板 ref：portal 内实测尺寸 + 失焦关闭的命中判定。 */
   const panelRef = useRef<HTMLDivElement | null>(null)
-  /** 草稿：日历选中日（本地零点；未选=undefined → 无完整时刻，确定禁用防误排期）。 */
+  /** 草稿：日历选中日（本地零点）。展开时由 togglePicker 播种（有排期=排期日；
+   * 无排期=下一整点所在日）；用户再点一次已选日取消 → undefined（无完整时刻，确定禁用）。 */
   const [draftDay, setDraftDay] = useState<Date | undefined>(undefined)
   /** 草稿：时（0-23）。 */
   const [draftHour, setDraftHour] = useState(0)
@@ -301,11 +303,12 @@ export function PaeReviewCard({
       setDraftHour(parts.hour)
       setDraftMinute(parts.minute)
     } else {
-      // 未排期：日期不预选（须先点选日历日，确定才可用），时/分预填下一整点
-      const clock = defaultDraftClock(Date.now())
-      setDraftDay(undefined)
-      setDraftHour(clock.hour)
-      setDraftMinute(clock.minute)
+      // 未排期：默认草稿 = 下一整点——日历默认选中该日、时/分对齐（打开即完整
+      // 且未来 → 确定立即可用；撤销「须先点选日期」的约束）
+      const next = new Date(nextFullHour(Date.now()))
+      setDraftDay(new Date(next.getFullYear(), next.getMonth(), next.getDate()))
+      setDraftHour(next.getHours())
+      setDraftMinute(next.getMinutes())
     }
     setOpen(true)
   }
@@ -315,13 +318,13 @@ export function PaeReviewCard({
       day === undefined ? undefined : new Date(day.getFullYear(), day.getMonth(), day.getDate()),
     )
   }
-  /** 草稿完整时刻（本地）；日未选 → undefined（弱化提示 scheduleHint）。 */
+  /** 草稿完整时刻（本地）；日被取消选中 → undefined（弱化提示 scheduleHint）。 */
   const draftAt = composeAt(draftDay, draftHour, draftMinute)
   /** 草稿是否可提交（完整组合且晚于当前时刻）。 */
   const draftReady = draftAt !== undefined && draftAt > Date.now()
-  /** 浮层状态行修饰类：合法=--ok、过去=--err、不完整=无。 */
+  /** 浮层状态行修饰类：合法=--ok、过去=--err、日未选=无修饰。 */
   const draftStatusMod = draftAt === undefined ? '' : draftReady ? '--ok' : '--err'
-  /** 浮层状态行文案：完整未来=绿色预览；过去=红错（含选今天但时分已过）；未选日=弱化提示。 */
+  /** 浮层状态行文案：完整未来=绿色预览；过去=红错（含选今天但时分已过）；日未选=弱化提示。 */
   const draftStatusText =
     draftAt === undefined
       ? t('scheduleHint')
@@ -742,6 +745,25 @@ export function PaeReviewCardView({
       cancelled = true
     }
   }, [sessionRemote])
+
+  // —— 会话查看脉冲：composer 链每次会话打开/刷新都会重挂载本 selector（含无
+  // pending 返回 null 时）——hooks 必须在本文件 isPlanReviewPending 早退之前执行。
+  // 以新 sessionKey 挂载即发一次 pae-ping（模块级 10s 限频）；宿主桥接后编排器
+  // 仅在 scheduled 等待期重弹回显卡，executing/paused 保持不显示。
+  const fallbackSessionId = (pendingInteraction as { sessionId?: unknown } | null | undefined)
+    ?.sessionId
+  const sessionKey = sessionId ?? (typeof fallbackSessionId === 'string' ? fallbackSessionId : '')
+  useEffect(() => {
+    if (sessionKey === '') return
+    const last = pingedAt.get(sessionKey) ?? 0
+    if (Date.now() - last < PING_INTERVAL_MS) return
+    pingedAt.set(sessionKey, Date.now())
+    void settingsRemote
+      .update(PAE_PING_NS, { [sessionKey]: { t: Date.now() } }, undefined)
+      .catch(() => {
+        // 装配/连接故障：静默（无此信号仅失去自动重弹）
+      })
+  }, [sessionKey, settingsRemote])
 
   // owner props 的 pendingInteraction 与 selector 的 matched 同值；结构判定不过则不接管
   if (!isPlanReviewPending(pendingInteraction)) return null

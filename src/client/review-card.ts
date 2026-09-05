@@ -162,6 +162,20 @@ export function encodeApprovalSchedule(
   return `${PAE_SCHEDULE_PREFIX}at:${when}`
 }
 
+/**
+ * 无排期打开面板的默认草稿（epoch ms）：now 向上取整到下一整点（:00，
+ * 分/秒/毫秒归零）；恰在整点也顺延一小时——结果必严格晚于 now。
+ * 跨天进位由 Date 本地构造自然处理（如 23:20 → 次日 00:00）。
+ * @param now - 当前时刻（epoch ms）。
+ * @returns 下一整点时刻（epoch ms）。
+ */
+export function nextFullHour(now: number): number {
+  const next = new Date(now)
+  next.setMinutes(0, 0, 0) // 先归零到整点，再顺延一小时（整点本身也会 +1h）
+  next.setHours(next.getHours() + 1)
+  return next.getTime()
+}
+
 /** 排期浮层相对视口的 fixed 定位结果（left/top 均为 px）。 */
 export interface PickerPlacement {
   /** 面板左缘距视口左缘（px）。 */
