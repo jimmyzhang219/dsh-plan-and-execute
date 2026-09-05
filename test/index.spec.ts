@@ -8,6 +8,7 @@ import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PersistedOrchestratorState } from '../src/persist.ts'
 import { PAE_MODELS_NS, PAE_PING_NS, type PaePhase } from '../src/state.ts'
+import { fakeImageBlock } from './helpers.ts'
 
 /** 最小假 ctx：捕获注册项。inject 同步执行 setup 并回传 ctx 本体。 */
 function fakeCtx() {
@@ -241,6 +242,31 @@ describe('apply 装配', () => {
     const result = await handler({ agent, rawInput: '重构登录模块' })
     expect(result).toMatchObject({ kind: 'success' })
     // 用户原文 + kickoff 指令
+    expect(agent.steer).toHaveBeenCalledTimes(2)
+  })
+
+  it('命令声明 input.images: true；带图启动 → 锚定消息图块在前 + 落盘 taskImages', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const definition = ctx.registered.commands[0]!
+    expect(definition.input).toEqual({ hint: '<任务描述>', images: true })
+    const handler = definition.handler as (invocation: Record<string, unknown>) => Promise<unknown>
+    const agent = fakeAgent('none')
+    const img = fakeImageBlock('att-entry')
+    const result = await handler({ agent, rawInput: '重构登录模块', attachments: [img] })
+    expect(result).toMatchObject({ kind: 'success' })
+    // 首条注入 = 任务图文（图块在前、文字收尾），其后 = kickoff 指令
+    const first = agent.steer.mock.calls[0]?.[0] as
+      | { content: Array<{ type: string; text?: string }> }
+      | undefined
+    expect(first?.content[0]).toMatchObject({ type: 'image' })
+    expect(first?.content[1]).toMatchObject({ type: 'text', text: '重构登录模块' })
+    // 编排状态落盘 taskImages（真实 fileStorage，读 orchestrator.json）
+    const state = JSON.parse(
+      await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8'),
+    ) as { taskImages?: unknown }
+    expect(state.taskImages).toEqual([img])
     expect(agent.steer).toHaveBeenCalledTimes(2)
   })
 

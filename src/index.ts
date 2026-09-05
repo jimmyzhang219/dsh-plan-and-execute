@@ -341,8 +341,8 @@ export function apply(ctx: Context, config: Config): void {
     commandCtx.commands.register({
       name: 'plan-and-execute',
       description: 'Plan-and-Execute：规划 → 审批 → 逐步执行（支持确认点与失败暂停）',
-      input: { hint: '<任务描述>' },
-      handler: async ({ agent, rawInput }) => {
+      input: { hint: '<任务描述>', images: true },
+      handler: async ({ agent, rawInput, attachments }) => {
         const task = rawInput.trim()
         if (task === '') {
           return { kind: 'error', text: '请提供任务描述：/plan-and-execute <任务>' }
@@ -380,7 +380,7 @@ export function apply(ctx: Context, config: Config): void {
             ctx.logger.warn(`dsh-plan-and-execute: 会话标题写入失败：${String(error)}`)
           }
         }
-        await orchestrator.begin(task)
+        await orchestrator.begin(task, attachments)
         return {
           kind: 'success',
           text: 'Plan-and-Execute 已启动：进入规划阶段，等待模型提交计划。',
