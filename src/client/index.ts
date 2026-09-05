@@ -54,11 +54,17 @@ export function apply(ctx: Context): void {
           // 会话打开信号：本卡无持久化状态通道，宿主靠 pae-ping 脉冲得知「会话正被查看」，
           // 以便 scheduled 等待期重弹回显卡。select 每次链求值都执行（含无 pending），
           // 限频防同一会话持续渲染风暴（空闲无渲染则天然不重发）。
+          if (sid !== '')
+            console.log(
+              `[pae-debug] select sid=${sid} pending=${isPlanReviewPending(pendingInteraction)}`,
+            )
           if (sid !== '' && allowSessionPing(sid, Date.now())) {
+            console.log(`[pae-debug] ping send sid=${sid}`)
             void ctx.remote.settings
               .update(PAE_PING_NS, { [sid]: { t: Date.now() } }, undefined)
-              .catch(() => {
-                // 装配/连接故障：静默（缺信号仅失去自动重弹，不阻塞其他功能）
+              .then(() => console.log(`[pae-debug] ping sent sid=${sid}`))
+              .catch((cause: unknown) => {
+                console.warn(`[pae-debug] ping FAILED sid=${sid}`, cause)
               })
           }
           return isPlanReviewPending(pendingInteraction) ? pendingInteraction : null

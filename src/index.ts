@@ -338,15 +338,17 @@ export function apply(ctx: Context, config: Config): void {
   //（pae-ping）——两个注册各自独立 try/catch：任一失败（如部署已有同名命名空间）
   // 只降级对应功能，不互相牵连；两通道均不可用时桥接一并跳过（写通道不可用不影响
   // 插件其余功能）。载荷按 sessionId 分键定位编排器，无对应编排器的会话静默跳过（幂等容错）。
-  // settings 为可选服务：cordis 严格属性访问下未 inject 的服务直读会抛
-  // "cannot get property without inject"，须经 ctx.get 取用（与 userQuestions/agents 同款）。
-  // 命名空间注册各自独立 try/catch：任一失败只降级对应功能；服务缺失则桥接整体跳过。
-  const settingsService = ctx.get('settings') as
-    | { register(ns: string, schema: unknown): unknown }
-    | undefined
-  let modelsNsRegistered = false
-  let pingNsRegistered = false
-  if (settingsService !== undefined) {
+  // settings 为可选服务：服务挂在宿主 app 作用域，插件 ctx 的 ctx.get('settings')
+  // 解析不到，须经 ctx.inject(['settings']) 可选注入——与 commands 同款：服务缺失时
+  // 不回调、插件照常加载（headless 等无 settings 部署只降级静默通道）。注册与
+  // settings/updated 监听都放在该作用域内（事件 scope 与命名空间注册同源）。
+  // 命名空间注册各自独立 try/catch：任一失败只降级对应功能，不互相牵连。
+  ctx.inject(['settings'], (settingsCtx) => {
+    const settingsService = settingsCtx.settings as unknown as {
+      register(ns: string, schema: unknown): unknown
+    }
+    let modelsNsRegistered = false
+    let pingNsRegistered = false
     try {
       settingsService.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
       modelsNsRegistered = true
@@ -363,9 +365,12 @@ export function apply(ctx: Context, config: Config): void {
         `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_PING_NS}（会话打开重弹不可用）：${String(error)}`,
       )
     }
-  }
-  if (modelsNsRegistered || pingNsRegistered) {
-    ctx.on('settings/updated', (ns: string, next: unknown) => {
+    console.log(
+      `[pae-debug] flags models=${String(modelsNsRegistered)} ping=${String(pingNsRegistered)}`,
+    )
+    if (!modelsNsRegistered && !pingNsRegistered) return
+    settingsCtx.on('settings/updated', (ns: string, next: unknown) => {
+      console.log(`[pae-debug] TOP ns=${ns}`)
       if (ns === PAE_MODELS_NS) {
         // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
         // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
@@ -378,7 +383,12 @@ export function apply(ctx: Context, config: Config): void {
             if (orchestrator === undefined) continue
             const parsed = parsePaeModels(section)
             const llm = ctx.get('llm') as
-              | { resolveCallConfig(c: { provider: string; model: string }): Promise<{ provider: string; model: string }> }
+              | {
+                  resolveCallConfig(c: {
+                    provider: string
+                    model: string
+                  }): Promise<{ provider: string; model: string }>
+                }
               | undefined
             const resolved: Record<number, { provider: string; model: string }> = {}
             for (const [stepKey, model] of Object.entries(parsed)) {
@@ -424,8 +434,10 @@ export function apply(ctx: Context, config: Config): void {
           )) {
             const orchestrator = bySessionId.get(sessionId)
             if (orchestrator === undefined) {
+              console.log(`[pae-debug] ping no-orch sid=${sessionId}`)
               continue
             }
+            console.log(`[pae-debug] ping parsed=${String(parsePaePing(section))} sid=${sessionId}`)
             if (!parsePaePing(section)) continue
             // fire-and-forget：内部收尾（save/run）rejection 在此接住记 warn；
             // 'asked'/'ignored' 结果不消费（只表达「已发起」）
@@ -444,7 +456,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       return undefined
     })
-  }
+  })
 
   // —— 阶段 prompt sections（读编排器内存态；未加载时渲染空）——
   ctx.systemPrompt.section({
