@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildSchedulePatch,
   buildSettingsPatch,
+  encodeApprovalSchedule,
   isPlanReviewPending,
   parsePlanDetail,
   parseScheduleAt,
@@ -122,9 +122,24 @@ describe('parseScheduleAt', () => {
   })
 })
 
-describe('buildSchedulePatch', () => {
-  it('sessionId 键 + {at}', () => {
-    expect(buildSchedulePatch('sess-1', 123)).toEqual({ 'sess-1': { at: 123 } })
-    expect(buildSchedulePatch('sess-1', null)).toEqual({ 'sess-1': { at: null } })
+describe('encodeApprovalSchedule', () => {
+  it('首卡（无原排期）未指定时间 → undefined（不携带排期编码）', () => {
+    expect(encodeApprovalSchedule(null, undefined)).toBeUndefined()
+  })
+  it('首卡指定时刻 → at 编码', () => {
+    expect(encodeApprovalSchedule(1_750_000_000_000, undefined)).toBe(
+      'paeSchedule:at:1750000000000',
+    )
+  })
+  it('回显卡清为立即（when===null）→ now 编码', () => {
+    expect(encodeApprovalSchedule(null, 1_750_000_000_000)).toBe('paeSchedule:now')
+  })
+  it('回显卡保持原排期（when===hadScheduledAt）→ undefined', () => {
+    expect(encodeApprovalSchedule(1_750_000_000_000, 1_750_000_000_000)).toBeUndefined()
+  })
+  it('回显卡改新时刻 → at 编码', () => {
+    expect(encodeApprovalSchedule(1_750_000_060_000, 1_750_000_000_000)).toBe(
+      'paeSchedule:at:1750000060000',
+    )
   })
 })

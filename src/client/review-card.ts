@@ -139,14 +139,25 @@ export function buildSettingsPatch(
 }
 
 /**
- * 排期意图 → settings.update 载荷（pae-schedule 命名空间；sessionId 键）。
- * @param sessionId - 会话标识（载荷键；宿主侧按此定位编排器）。
- * @param at - 目标执行时刻（epoch ms）；null 表示清除排期为立即执行。
- * @returns pae-schedule 命名空间的 update 载荷。
+ * 批准载荷排期编码前缀（服务端 state.ts 的 decodeApprovalSchedule 同协议双写——
+ * 两侧字符串常量各自维护，不能值互 import，改动须两侧同步）。
+ * 值形态：`<前缀>now` 或 `<前缀>at:<epochMs>`。
  */
-export function buildSchedulePatch(
-  sessionId: string,
-  at: number | null,
-): Record<string, { at: number | null }> {
-  return { [sessionId]: { at } }
+const PAE_SCHEDULE_PREFIX = 'paeSchedule:'
+
+/**
+ * 批准时构造排期载荷（planning 首卡与 scheduled 回显卡的差异编码）。
+ * @param when - 卡片当前选择：null=立即执行；number=指定时刻。
+ * @param hadScheduledAt - detail 解析出的原排期（undefined=首卡）。
+ * @returns answer custom 载荷；undefined=不携带排期编码。
+ */
+export function encodeApprovalSchedule(
+  when: number | null,
+  hadScheduledAt: number | undefined,
+): string | undefined {
+  // 首卡（无原排期）：默认立即执行不携带编码；指定时刻才编码。
+  // 回显卡：清为立即 → now；保持原排期（同值）→ 不携带；新时刻 → at。
+  if (when === null) return hadScheduledAt === undefined ? undefined : `${PAE_SCHEDULE_PREFIX}now`
+  if (when === hadScheduledAt) return undefined
+  return `${PAE_SCHEDULE_PREFIX}at:${when}`
 }

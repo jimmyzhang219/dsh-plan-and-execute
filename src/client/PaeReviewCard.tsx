@@ -17,10 +17,10 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { CardArgs, ModelOption } from './plan-card.ts'
 import { flattenCatalog, optionKey } from './plan-card.ts'
-import { PAE_MODELS_NS, PAE_SCHEDULE_NS } from '../state.ts'
+import { PAE_MODELS_NS } from '../state.ts'
 import {
-  buildSchedulePatch,
   buildSettingsPatch,
+  encodeApprovalSchedule,
   isPlanReviewPending,
   parsePlanDetail,
   questionView,
@@ -137,9 +137,20 @@ export function PaeReviewCard({
       setError(cause instanceof Error ? cause.message : String(cause))
     })
   }
-  /** 决策按钮点击：按所选标签组装 answers 载荷并提交（pending.answer）。 */
-  const decide = (label: string, custom?: string): void => {
+  /**
+   * 决策按钮点击：批准 → custom 仅承载排期载荷编码（encodeApprovalSchedule，
+   * 反馈文本只随「继续修改」）；继续修改 → 反馈文本（trim 后空则省略）。
+   */
+  const decide = (label: string): void => {
     if (review === undefined) return
+    const custom =
+      label === '批准'
+        ? // 原排期以顶层 scheduledAt prop 为准（与 when 初值同源；生产取值即
+          // View 从 detail 解析透传的 args.scheduledAt——见组件契约注释）
+          encodeApprovalSchedule(when, scheduledAt)
+        : feedback.trim() === ''
+          ? undefined
+          : feedback.trim()
     const answers: AnswerLike['answers'] = [
       {
         id: review.id,
@@ -173,16 +184,6 @@ export function PaeReviewCard({
       .update(PAE_MODELS_NS, buildSettingsPatch(sessionId, next), undefined)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
   }
-  /** 静默写 settings（无 sessionId 时跳过——同模型下拉的容错）。 */
-  const pushSchedule = (at: number | null): void => {
-    if (sessionId === '') {
-      console.warn('[dsh-plan-and-execute] 审批卡缺少 sessionId，跳过排期保存')
-      return
-    }
-    void settings
-      .update(PAE_SCHEDULE_NS, buildSchedulePatch(sessionId, at), undefined)
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
-  }
   /** 草稿组合时间（date/time 输入只改草稿态，不自动提交）。 */
   const draftAt = composeAt(datePart, timePart)
   /** 草稿完整且晚于当前时刻（「确定」可用与绿色预览的共用条件）。 */
@@ -210,22 +211,20 @@ export function PaeReviewCard({
     }
     setPickerOpen((open) => !open)
   }
-  /** 「确定」按钮：草稿完整且晚于当前才提交（与按钮禁用态同条件）；写排期并关浮层。 */
+  /** 「确定」按钮：草稿完整且晚于当前才提交（与按钮禁用态同条件）；仅本地写 when 并关浮层（零后端调用）。 */
   const commitSchedule = (): void => {
     if (draftAt === undefined || !draftReady) return
     setError(null)
     setWhen(draftAt)
     setPickerOpen(false)
-    pushSchedule(draftAt)
   }
-  /** 清除排期（立即执行）：浮层按钮与 chip 的 × 共用。 */
+  /** 清除排期（立即执行）：浮层按钮与 chip 的 × 共用；仅本地清 when=null（排期意图在批准时随载荷传达）。 */
   const clearSchedule = (): void => {
     setWhen(null)
     setDatePart('')
     setTimePart('')
     setPickerOpen(false)
     setError(null)
-    pushSchedule(null)
   }
 
   return (
@@ -399,7 +398,7 @@ export function PaeReviewCard({
                 variant={index === review.options.length - 1 ? 'primary' : 'outline'}
                 disabled={busy}
                 title={option.description}
-                onClick={() => decide(option.label, feedback)}
+                onClick={() => decide(option.label)}
               >
                 {optionLabel(option.label)}
               </Button>

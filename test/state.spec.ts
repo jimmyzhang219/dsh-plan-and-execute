@@ -7,8 +7,6 @@ import {
   decodeApprovalSchedule,
   isPlanModeActive,
   normalizeDir,
-  PAE_PLUGIN,
-  PAE_SCHEDULE_NS,
   type PaeStepReportPayload,
 } from '../src/state.ts'
 
@@ -108,13 +106,6 @@ describe('旧版 outcome → status 迁移', () => {
       summary: '受阻',
       exit_code: 1,
     })
-  })
-})
-
-describe('PAE_SCHEDULE_NS', () => {
-  it('排期 settings 命名空间常量', () => {
-    expect(PAE_SCHEDULE_NS).toBe('pae-schedule')
-    expect(PAE_PLUGIN).toBe('dsh-plan-and-execute')
   })
 })
 

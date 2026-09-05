@@ -6,7 +6,7 @@ import {
   PaeReviewCardView,
   type PaeReviewCardProps,
 } from '../../src/client/PaeReviewCard.tsx'
-import { PAE_MODELS_NS, PAE_SCHEDULE_NS } from '../../src/state.ts'
+import { PAE_MODELS_NS } from '../../src/state.ts'
 import { zh } from '../../src/client/locale.ts'
 
 // vitest 未开 globals：显式 cleanup 避免跨用例 DOM 累积（与 plan-card-render.spec.tsx 一致）。
@@ -175,25 +175,41 @@ describe('执行时间控件', () => {
     return `计划于 ${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} 执行`
   }
 
-  it('默认（无排期）显示「立即执行」chip；打开浮层选完整时间 → 浮层内即时预览且不写 settings；点「确定」→ update 一次、chip 转计划态', async () => {
+  it('默认（无排期）显示「立即执行」chip；打开浮层选完整时间 → 浮层内即时预览且零 settings 写；点「确定」→ 本地 when 生效、chip 转计划态', async () => {
     const update = openPicker()
     const when = new Date(Date.now() + 86_400_000) // 明天同时刻
     fillParts(when)
     // 草稿只驱动浮层状态行（schedulePreview 绿色预览），不触发自动提交
     await waitFor(() => expect(statusText()).toContain(previewOf(when)))
     expect(update).not.toHaveBeenCalled()
-    // 显式「确定」→ 仅此一次 settings 提交，浮层关闭，chip 显示「计划于 … 执行」
+    // 显式「确定」→ 仅本地提交（无 settings 写），浮层关闭，chip 显示「计划于 … 执行」
     fireEvent.click(commitBtn())
-    await waitFor(() => {
-      expect(update).toHaveBeenCalledTimes(1)
-      expect(update).toHaveBeenCalledWith(
-        PAE_SCHEDULE_NS,
-        expect.objectContaining({ 'sess-1': { at: expect.any(Number) } }),
-        undefined,
-      )
-    })
-    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+    await waitFor(() => expect(screen.queryByTestId('schedule-picker')).toBeNull())
     expect(screen.getByRole('button', { name: previewOf(when) })).toBeTruthy()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('确定设置时间后点「批准」→ answer 携带 at 编码（排期意图随批准载荷传达）', async () => {
+    const update = openPicker()
+    const when = new Date(Date.now() + 86_400_000)
+    fillParts(when)
+    fireEvent.click(commitBtn())
+    await waitFor(() => expect(screen.queryByTestId('schedule-picker')).toBeNull())
+    // 期望 epoch 由输入的各部分推导（输入不含秒/毫秒，不能直接用 when.getTime()）
+    const expected = new Date(
+      when.getFullYear(),
+      when.getMonth(),
+      when.getDate(),
+      when.getHours(),
+      when.getMinutes(),
+    ).getTime()
+    fireEvent.click(screen.getByRole('button', { name: '批准' }))
+    await waitFor(() => {
+      expect(base.pending.answer).toHaveBeenLastCalledWith({
+        answers: [{ id: 'pae-approve', selected: ['批准'], custom: `paeSchedule:at:${expected}` }],
+      })
+    })
+    expect(update).not.toHaveBeenCalled() // 排期全程无 settings 写
   })
 
   it('回显卡：scheduledAt 存在 → 默认显示计划时间 chip（不显示立即执行）', () => {
@@ -202,15 +218,21 @@ describe('执行时间控件', () => {
     expect(screen.getByText(/计划于 2026-09-06 10:00 执行/)).toBeTruthy()
   })
 
-  it('点「清除排期」× → settings.update(PAE_SCHEDULE_NS, {at: null})', async () => {
+  it('回显卡点「清除排期」× → 仅本地清 when=null（无 settings 写）；点「批准」→ answer 携带 now 编码', async () => {
     const update = vi.fn(async () => undefined)
     const at = Date.now() + 86_400_000
     render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
     // 排期态 chip 旁的 ×（aria-label=清除排期）与浮层内「立即执行」按钮同属 clearSchedule，
     // 但可访问名不同（× 用 scheduleClear，避免与浮层按钮重名）
     fireEvent.click(screen.getByRole('button', { name: /清除排期/ }))
+    expect(update).not.toHaveBeenCalled()
+    // chip 回「立即执行」态（面板未展开，唯一匹配）
+    expect(screen.getByRole('button', { name: /立即执行/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '批准' }))
     await waitFor(() => {
-      expect(update).toHaveBeenCalledWith(PAE_SCHEDULE_NS, { 'sess-1': { at: null } }, undefined)
+      expect(base.pending.answer).toHaveBeenLastCalledWith({
+        answers: [{ id: 'pae-approve', selected: ['批准'], custom: 'paeSchedule:now' }],
+      })
     })
   })
 
@@ -239,12 +261,10 @@ describe('执行时间控件', () => {
     )
   })
 
-  it('浮层点「立即执行」→ settings.update(PAE_SCHEDULE_NS, {at: null}) 并关闭浮层', async () => {
+  it('浮层点「立即执行」→ 仅本地清为立即（无 settings 写）并关闭浮层', async () => {
     const update = openPicker()
     fireEvent.click(screen.getByTestId('schedule-now'))
-    await waitFor(() => {
-      expect(update).toHaveBeenCalledWith(PAE_SCHEDULE_NS, { 'sess-1': { at: null } }, undefined)
-    })
+    expect(update).not.toHaveBeenCalled()
     expect(screen.queryByTestId('schedule-picker')).toBeNull()
   })
 
