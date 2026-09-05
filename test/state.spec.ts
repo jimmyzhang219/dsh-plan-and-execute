@@ -4,6 +4,7 @@ import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { restoreState, snapshotState } from '../src/persist.ts'
 import {
   buildTodoPayload,
+  decodeApprovalSchedule,
   isPlanModeActive,
   normalizeDir,
   PAE_PLUGIN,
@@ -114,6 +115,29 @@ describe('PAE_SCHEDULE_NS', () => {
   it('排期 settings 命名空间常量', () => {
     expect(PAE_SCHEDULE_NS).toBe('pae-schedule')
     expect(PAE_PLUGIN).toBe('dsh-plan-and-execute')
+  })
+})
+
+describe('decodeApprovalSchedule', () => {
+  it('custom 缺省/空 → none（无排期意图）', () => {
+    expect(decodeApprovalSchedule(undefined)).toEqual({ kind: 'none' })
+    expect(decodeApprovalSchedule('')).toEqual({ kind: 'none' })
+  })
+  it('显式立即执行编码 → now', () => {
+    expect(decodeApprovalSchedule('paeSchedule:now')).toEqual({ kind: 'now' })
+  })
+  it('指定时刻编码（安全正整数 epoch ms）→ at', () => {
+    expect(decodeApprovalSchedule('paeSchedule:at:1750000000000')).toEqual({
+      kind: 'at',
+      at: 1_750_000_000_000,
+    })
+  })
+  it('格式非法（负数/小数/非数字/垃圾文本/前缀后多字）→ none（不抛）', () => {
+    expect(decodeApprovalSchedule('paeSchedule:at:-1')).toEqual({ kind: 'none' })
+    expect(decodeApprovalSchedule('paeSchedule:at:1.5')).toEqual({ kind: 'none' })
+    expect(decodeApprovalSchedule('paeSchedule:at:x')).toEqual({ kind: 'none' })
+    expect(decodeApprovalSchedule('垃圾文本')).toEqual({ kind: 'none' })
+    expect(decodeApprovalSchedule('paeSchedule:nowx')).toEqual({ kind: 'none' })
   })
 })
 

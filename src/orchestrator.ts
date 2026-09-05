@@ -38,6 +38,7 @@ import {
 } from './prompts.ts'
 import {
   buildTodoPayload,
+  decodeApprovalSchedule,
   normalizeDir,
   type PaePausedReason,
   type PaePhase,
@@ -176,11 +177,6 @@ export class Orchestrator {
   private disposed = false
   /** 当前审批门闩（afterApproval 挂起，等待计划批准后启动执行循环）。 */
   private approval: PromiseWithResolvers<PaePlanPayload> | undefined
-  /**
-   * 当前审批卡的排期意图：number=未来时刻；null=立即执行；undefined=未改动
-   * （仅 scheduled 回显卡语义，保持原排期）。
-   */
-  private pendingSchedule: number | null | undefined = null
   /** 悬空审批卡的可中断句柄（到点触发前先取消，防止卡片与状态失同步）。 */
   private currentAskAbort: AbortController | undefined
   /** 最近一次暂停/驳回的反馈 free-text（进入 replan 时回给模型）。 */
@@ -368,14 +364,10 @@ export class Orchestrator {
       this.currentAskAbort.signal,
     )
     if (answer === 'dismissed') {
-      // 卡关闭即失效：清除本次排期意图，下次提交默认立即执行
-      this.pendingSchedule = null
       return { approved: false, error: '用户暂时搁置了审批。留在规划阶段，等待用户下一条消息。' }
     }
     const item = answer.answers.find((entry) => entry.id === 'pae-approve')
     if (item?.selected[0] !== APPROVE_LABEL) {
-      // 卡关闭即失效：驳回后重新提交不再携带本次排期意图
-      this.pendingSchedule = null
       const feedback = item?.custom?.trim()
       const discipline =
         '修订纪律：先用只读工具重新读取（read）要修改的步骤文件确认最新内容，再修改；' +
@@ -399,20 +391,20 @@ export class Orchestrator {
     // 不清空 stepModels：批准非新计划（begin/enterReplan 已覆盖），审批前设置须存活到执行期
     this.state.skipped.clear()
     this.state.anchorSeqs.clear()
-    const pendingAt = this.pendingSchedule
-    this.pendingSchedule = undefined
-    if (pendingAt !== null && pendingAt !== undefined && pendingAt > this.now()) {
+    // 排期载荷解码：custom 无编码（首卡默认）= 立即执行
+    const dec = decodeApprovalSchedule(item?.custom)
+    if (dec.kind === 'at' && dec.at > this.now()) {
       // 定时执行：登记排期与到点执行，executing 由到点触发（fireScheduledRun）驱动
       this.state.phase = 'scheduled'
       this.state.stepIndex = undefined
-      this.state.scheduledAt = pendingAt
+      this.state.scheduledAt = dec.at
       await this.save()
       this.session.writeTodos(buildTodoPayload(plan.steps, this.state.statuses).todos)
-      this.deps.scheduler?.arm(pendingAt)
+      this.deps.scheduler?.arm(dec.at)
       this.approval?.resolve(plan)
       return { approved: true }
     }
-    // 立即执行（现状路径；排期已滑过亦降级至此）
+    // 立即执行（现状路径；指定时刻已滑过亦降级至此）
     this.state.phase = 'executing'
     this.state.stepIndex = 0
     this.state.scheduledAt = undefined
@@ -451,23 +443,6 @@ export class Orchestrator {
     }
     this.state.stepModels = new Map(Object.entries(models).map(([k, v]) => [Number(k), v]))
     await this.save()
-    return { ok: true }
-  }
-
-  /**
-   * 记录审批卡当前的执行时间意图（settings/updated 桥接调用）。
-   * number=未来时刻；null=立即执行；仅 planning（首次审批）与 scheduled（回显卡）
-   * 阶段可写——意图只在点击「批准」时消费，卡关闭即失效。
-   * @param atOrNull - 目标执行时刻（epoch ms）；null 表示批准后立即执行。
-   * @returns 失败原因或成功。
-   */
-  async applyPendingSchedule(
-    atOrNull: number | null,
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
-    if (this.state.phase !== 'planning' && this.state.phase !== 'scheduled') {
-      return { ok: false, error: '当前阶段不可设置执行排期' }
-    }
-    this.pendingSchedule = atOrNull
     return { ok: true }
   }
 
@@ -799,8 +774,6 @@ export class Orchestrator {
     plan: PaePlanPayload,
     at: number,
   ): Promise<'re-approve' | 'replan' | 'now' | 'dismissed'> {
-    // 回显卡意图默认「保持原排期」：仅当用户经 settings 旁路改过才覆盖
-    this.pendingSchedule = undefined
     const controller = new AbortController()
     this.currentAskAbort = controller
     try {
@@ -820,30 +793,20 @@ export class Orchestrator {
         ],
         controller.signal,
       )
-      if (answer === 'dismissed') {
-        // 卡关闭即失效：意图不得带入下一次弹卡/审批
-        this.pendingSchedule = undefined
-        return 'dismissed'
-      }
-      // 卡悬空期间到点触发（fireScheduledRun）已把 phase 迁出 scheduled、执行已在跑，
-      // 此答案作废——复检不依赖宿主 abort 行为（答案可能在 abort 前已 resolve 入队）
-      if (this.state.phase !== 'scheduled') {
-        this.pendingSchedule = undefined
-        return 'dismissed'
-      }
+      if (answer === 'dismissed') return 'dismissed'
+      // F-2 竞态复检（在解码前）：卡悬空期间到点触发（fireScheduledRun）已把 phase 迁出
+      // scheduled、执行已在跑，此答案作废——复检不依赖宿主 abort 行为（答案可能已 resolve 入队）
+      if (this.state.phase !== 'scheduled') return 'dismissed'
       const item = answer.answers.find((entry) => entry.id === 'pae-approve')
-      if (item?.selected[0] !== APPROVE_LABEL) {
-        // 驳回（回规划）即失效：意图不得带入下一次 submitPlan
-        this.pendingSchedule = undefined
-        return 'replan'
-      }
-      const intent = this.pendingSchedule
-      this.pendingSchedule = undefined
-      if (intent === null || (typeof intent === 'number' && intent <= this.now())) return 'now'
-      if (typeof intent === 'number') {
-        this.state.scheduledAt = intent
+      if (item?.selected[0] !== APPROVE_LABEL) return 'replan'
+      // 批准排期载荷解码：无编码（none）= 保持原排期，不重 arm
+      const dec = decodeApprovalSchedule(item?.custom)
+      if (dec.kind === 'now' || (dec.kind === 'at' && dec.at <= this.now())) return 'now'
+      if (dec.kind === 'at') {
+        // 替换排期：更新 scheduledAt 并重 arm 新时刻
+        this.state.scheduledAt = dec.at
         await this.save()
-        this.deps.scheduler?.arm(intent)
+        this.deps.scheduler?.arm(dec.at)
       }
       return 're-approve'
     } finally {

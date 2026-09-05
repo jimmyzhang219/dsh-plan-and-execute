@@ -688,64 +688,9 @@ describe('settings/updated 桥接', () => {
       expect.stringContaining('settings 命名空间注册失败'),
     )
   })
-
-  it('settings.register 仅 pae-schedule 抛错 → 排期功能降级，models 桥接保留可用', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    ctx.settings.register.mockImplementation((ns: string) => {
-      if (ns === 'pae-schedule') {
-        throw new Error('settings namespace "pae-schedule" is already registered')
-      }
-    })
-    expect(() =>
-      apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
-    ).not.toThrow()
-    // 降级 warn 仅针对 pae-schedule（models 注册成功不记 warn）
-    expect(ctx.logger.warn).toHaveBeenCalledTimes(1)
-    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('pae-schedule'))
-    // models 桥接仍注册：对 pae-step-models 载荷照常应用
-    const listener = settingsListenerOf(ctx)!
-    expect(listener).toBeDefined()
-    await seedState('planning', {
-      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
-    })
-    const agent = fakeAgent('planning')
-    await fireCreated(ctx, agent)
-    await listener(
-      'pae-step-models',
-      { 'sess-1': { 1: { provider: 'a', model: 'm' } } },
-      {},
-      'user',
-    )
-    await vi.waitFor(async () => {
-      expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'a', model: 'm' })
-      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
-      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'a', model: 'm' } })
-    })
-    // 注册失败命名空间（归部署中其他插件）的载荷不越权处理：静默跳过、不抛错
-    expect(() => listener('pae-schedule', { 'sess-1': { at: 1 } }, {}, 'client')).not.toThrow()
-  })
 })
 
 describe('定时排期接线', () => {
-  it('注册 pae-schedule settings 命名空间', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    expect(ctx.settings.register).toHaveBeenCalledWith('pae-step-models', expect.anything())
-    expect(ctx.settings.register).toHaveBeenCalledWith('pae-schedule', expect.anything())
-  })
-
-  it('settings/updated（pae-schedule）对未知会话不抛（幂等容错）', async () => {
-    const { apply } = await import('../src/index.ts')
-    const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    const bridge = settingsListenerOf(ctx)
-    await expect(
-      bridge!('pae-schedule', { ghost: { at: 1_800_000_000_000 } }, {}, 'client'),
-    ).resolves.toBeUndefined()
-  })
-
   it('agent/created 对 scheduled 阶段触发 revive（不提前返回，弹回显卡）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()

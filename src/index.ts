@@ -25,14 +25,7 @@ import type {} from '@deepseek-ai/dsh-tool-todo'
 import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator.ts'
 import { fileStorage } from './persist.ts'
 import { ScheduleRegistry } from './schedule.ts'
-import {
-  PAE_MODELS_NS,
-  PAE_MODELS_SCHEMA,
-  PAE_SCHEDULE_NS,
-  PAE_SCHEDULE_SCHEMA,
-  parsePaeModels,
-  parsePaeSchedule,
-} from './settings.ts'
+import { PAE_MODELS_NS, PAE_MODELS_SCHEMA, parsePaeModels } from './settings.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
 import { isPlanModeActive } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
@@ -334,53 +327,13 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
 
-  // —— settings 命名空间：审批卡静默写通道（模型下拉 / 执行时间）——
-  // 两个命名空间独立注册、独立降级：单个注册失败（如部署已有同名命名空间）只
-  // 使对应写通道不可用，不得连带杀死另一个命名空间的 settings/updated 桥接。
-  let modelsNsRegistered = false
+  // —— settings 命名空间：审批卡模型下拉静默写通道 + settings/updated 桥接 ——
+  // 注册失败（如部署已有同名命名空间）则桥接一并跳过（写通道不可用不影响插件其余功能）；
+  // 载荷按 sessionId 分键定位编排器，无对应编排器的会话静默跳过（幂等容错）。
   try {
     ctx.settings.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
-    modelsNsRegistered = true
-  } catch (error) {
-    ctx.logger.warn(
-      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
-    )
-  }
-  let scheduleNsRegistered = false
-  try {
-    ctx.settings.register(PAE_SCHEDULE_NS, PAE_SCHEDULE_SCHEMA)
-    scheduleNsRegistered = true
-  } catch (error) {
-    ctx.logger.warn(
-      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_SCHEDULE_NS}（审批卡执行时间不可用）：${String(error)}`,
-    )
-  }
-  if (modelsNsRegistered || scheduleNsRegistered) {
-    // —— settings/updated 桥接：审批卡写通道 → 编排器（applyStepModels / applyPendingSchedule）——
-    // 载荷按 sessionId 分键定位编排器；无对应编排器的会话静默跳过（幂等容错）。
-    // 注册失败命名空间的分支在各自入口跳过（该 ns 归部署中其他插件所有，不越权处理）。
     ctx.on('settings/updated', (ns: string, next: unknown) => {
-      if (ns === PAE_SCHEDULE_NS) {
-        if (!scheduleNsRegistered) return
-        // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
-        // 若 void 吞掉返回值，异步失败会变成 unhandled rejection（同模型分支语义）。
-        return (async () => {
-          for (const [sessionId, section] of Object.entries(
-            (next ?? {}) as Record<string, unknown>,
-          )) {
-            const orchestrator = bySessionId.get(sessionId)
-            if (orchestrator === undefined) continue
-            const at = parsePaeSchedule(section)
-            if (at === undefined) continue // 非法载荷忽略
-            const result = await orchestrator.applyPendingSchedule(at)
-            if (!result.ok) {
-              ctx.logger.warn(`dsh-plan-and-execute: 应用执行排期失败：${result.error}`)
-            }
-          }
-        })()
-      }
       if (ns !== PAE_MODELS_NS) return
-      if (!modelsNsRegistered) return
       // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
       // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
       // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。
@@ -424,6 +377,10 @@ export function apply(ctx: Context, config: Config): void {
         }
       })()
     })
+  } catch (error) {
+    ctx.logger.warn(
+      `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
+    )
   }
 
   // —— 阶段 prompt sections（读编排器内存态；未加载时渲染空）——

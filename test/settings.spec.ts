@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { PAE_SCHEDULE_NS, parsePaeSchedule } from '../src/settings.ts'
 import { parsePaeModels, PAE_MODELS_NS } from '../src/settings.ts'
 
 describe('parsePaeModels', () => {
@@ -26,22 +25,5 @@ describe('parsePaeModels', () => {
   })
   it('命名空间常量', () => {
     expect(PAE_MODELS_NS).toBe('pae-step-models')
-  })
-})
-
-describe('parsePaeSchedule', () => {
-  it('合法载荷解析 {at: number|null}', () => {
-    expect(parsePaeSchedule({ at: 1_750_000_000_000 })).toBe(1_750_000_000_000)
-    expect(parsePaeSchedule({ at: null })).toBeNull()
-  })
-  it('非法载荷返回 undefined（不抛）', () => {
-    expect(parsePaeSchedule({ at: 'x' })).toBeUndefined()
-    expect(parsePaeSchedule({ at: 1.5 })).toBeUndefined()
-    expect(parsePaeSchedule({ at: -1 })).toBeUndefined()
-    expect(parsePaeSchedule(null)).toBeUndefined()
-    expect(parsePaeSchedule('x')).toBeUndefined()
-  })
-  it('命名空间常量', () => {
-    expect(PAE_SCHEDULE_NS).toBe('pae-schedule')
   })
 })

@@ -88,6 +88,35 @@ export function buildTodoPayload(
   }
 }
 
+/** 批准答案 custom 载荷的排期解码结果。 */
+export type ApprovalSchedule = { kind: 'none' } | { kind: 'now' } | { kind: 'at'; at: number }
+
+/**
+ * 批准答案 custom 载荷的排期编码前缀（客户端 review-card.ts 的
+ * encodeApprovalSchedule 同协议双写——两侧字符串常量各自维护，不能值互 import，
+ * 改动须两侧同步）。值形态：`<前缀>now` 或 `<前缀>at:<epochMs>`。
+ */
+const PAE_SCHEDULE_PREFIX = 'paeSchedule:'
+
+/**
+ * 解码批准答案 custom 中的排期载荷（客户端 review-card.ts 的编码协议同源）。
+ * 非本插件编码（反馈文本等）/格式非法 → none（不抛）。
+ * @param custom - 批准答案的 custom 字段（undefined=未携带）。
+ * @returns 排期意图：none=无编码（无排期意图）；now=显式立即执行；at=指定时刻（epoch ms）。
+ */
+export function decodeApprovalSchedule(custom: string | undefined): ApprovalSchedule {
+  if (custom === undefined || custom === '') return { kind: 'none' }
+  if (custom === `${PAE_SCHEDULE_PREFIX}now`) return { kind: 'now' }
+  const atText = custom.startsWith(`${PAE_SCHEDULE_PREFIX}at:`)
+    ? custom.slice(`${PAE_SCHEDULE_PREFIX}at:`.length)
+    : undefined
+  if (atText !== undefined && /^\d+$/.test(atText)) {
+    const at = Number(atText)
+    if (Number.isSafeInteger(at) && at > 0) return { kind: 'at', at }
+  }
+  return { kind: 'none' }
+}
+
 /** 目录归一化（去尾部斜杠；planDir 校验用）。 */
 export function normalizeDir(path: string): string {
   return path.replace(/\/+$/, '')

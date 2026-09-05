@@ -876,42 +876,28 @@ describe('消息隔离（surface 锚定）', () => {
 })
 
 describe('批准时定时执行', () => {
-  it('带未来排期批准 → phase=scheduled + scheduledAt 持久化 + scheduler.arm(at)，不启动 run', async () => {
-    const steps: StepSeed[] = [{ file: 'a.md', title: 'A' }]
+  it('批准载荷带未来 at → phase=scheduled + scheduledAt 持久化 + scheduler.arm(at)，不启动 run', async () => {
     const scheduler = fakeScheduler()
-    // 手工编排：makeOrchestrator 内部已 submitPlan，这里改用 begin+submit 以便先设排期
-    const planDir = await mkdtemp(join(tmpdir(), 'pae-sched-'))
-    tempDirs.push(planDir)
-    const { Orchestrator } = await import('../src/orchestrator.ts')
-    const agent = new FakeAgent()
-    const { ask } = fakeAsk(answer('pae-approve', '批准'))
-    const storage = new FakeStorage()
-    const orchestrator = new Orchestrator({
-      agent,
-      ask,
-      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
-      planDir,
-      storage,
-      scheduler,
-      now: () => 1_700_000_000_000, // 固定“当前时刻”，atEpoch 相对其 +60s
-    })
-    await orchestrator.begin('定时任务')
-    // begin 已重置 planDir：步骤文件须在 begin 后写入（与 makeOrchestrator 同序）
-    await writeFile(join(planDir, 'a.md'), '# A\n内容', 'utf8')
-    const atEpoch = 1_700_000_060_000
-    expect(await orchestrator.applyPendingSchedule(atEpoch)).toEqual({ ok: true })
-    const verdict = await orchestrator.submitPlan(planDir, steps, 'S')
+    const at = 1_700_000_060_000
+    const { agent, storage, verdict } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准', `paeSchedule:at:${at}`)],
+      {},
+      undefined,
+      undefined,
+      { scheduler, now: () => 1_700_000_000_000 }, // 固定“当前时刻”，at 相对其 +60s
+    )
     expect(verdict).toEqual({ approved: true })
     expect(storage.state?.phase).toBe('scheduled')
-    expect(storage.state?.scheduledAt).toBe(atEpoch)
-    expect(scheduler.arm).toHaveBeenCalledWith(atEpoch)
+    expect(storage.state?.scheduledAt).toBe(at)
+    expect(scheduler.arm).toHaveBeenCalledWith(at)
     // 未启动 run：除 kickoff 外没有步骤指令注入
     await vi.waitFor(() => {
       expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
     })
   })
 
-  it('排期已过/未设排期批准 → 仍走立即执行（现行为），且 scheduler.cancel 未被调用', async () => {
+  it('无 custom 批准 → 立即执行（首卡默认），且 scheduler.cancel 未被调用', async () => {
     const scheduler = fakeScheduler()
     const { storage, verdict } = await makeOrchestrator(
       [{ file: 'a.md', title: 'A' }],
@@ -927,47 +913,22 @@ describe('批准时定时执行', () => {
     expect(scheduler.cancel).not.toHaveBeenCalled()
   })
 
-  it('applyPendingSchedule 过去的时刻后批准 → 降级立即执行（不 arm、scheduledAt 无脏写）', async () => {
-    const steps: StepSeed[] = [{ file: 'a.md', title: 'A' }]
+  it('批准载荷带已过去的 at → 降级立即执行（不 arm、scheduledAt 无脏写）', async () => {
     const scheduler = fakeScheduler()
-    const planDir = await mkdtemp(join(tmpdir(), 'pae-sched-'))
-    tempDirs.push(planDir)
-    const { Orchestrator } = await import('../src/orchestrator.ts')
-    const agent = new FakeAgent()
-    const { ask } = fakeAsk(answer('pae-approve', '批准'))
-    const storage = new FakeStorage()
-    const orchestrator = new Orchestrator({
-      agent,
-      ask,
-      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
-      planDir,
-      storage,
-      scheduler,
-      now: () => 1_700_000_000_000, // 固定“当前时刻”，past 相对其早 60s
-    })
-    await orchestrator.begin('定时任务')
-    // begin 已重置 planDir：步骤文件须在 begin 后写入（与同组构造同序）
-    await writeFile(join(planDir, 'a.md'), '# A\n内容', 'utf8')
-    const past = 1_699_999_940_000 // 早于 now 的时刻（迟到的排期意图）
-    expect(await orchestrator.applyPendingSchedule(past)).toEqual({ ok: true })
-    const verdict = await orchestrator.submitPlan(planDir, steps, 'S')
+    const past = 1_699_999_940_000 // 早于固定 now 的时刻（迟到的排期载荷）
+    const { storage, verdict } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准', `paeSchedule:at:${past}`)],
+      {},
+      undefined,
+      undefined,
+      { scheduler, now: () => 1_700_000_000_000 },
+    )
     expect(verdict).toEqual({ approved: true })
-    // 排期意图已滑过 → 走立即执行路径（phase=executing），不 arm、scheduledAt 不落盘
+    // 排期已滑过 → 走立即执行路径（phase=executing），不 arm、scheduledAt 不落盘
     expect(storage.state?.phase).toBe('executing')
     expect(storage.state?.scheduledAt).toBeUndefined()
     expect(scheduler.arm).not.toHaveBeenCalled()
-  })
-
-  it('applyPendingSchedule 仅 planning/scheduled 阶段可用', async () => {
-    const { orchestrator } = await makeOrchestrator(
-      [{ file: 'a.md', title: 'A' }],
-      [answer('pae-approve', '批准')],
-    )
-    // makeOrchestrator 后已 executing：executing 阶段拒绝
-    expect(await orchestrator.applyPendingSchedule(1_800_000_000_000)).toEqual({
-      ok: false,
-      error: expect.stringContaining('阶段'),
-    })
   })
 })
 
@@ -1057,7 +1018,7 @@ describe('scheduled 恢复与到点触发', () => {
     expect(scheduler.arm).toHaveBeenCalledWith(at)
   })
 
-  it('revive 回显卡：改时间批准 → 替换排期（scheduledAt 更新 + arm 新时刻）', async () => {
+  it('revive 回显卡：批准载荷带新 at → 替换排期（scheduledAt 更新 + arm 新时刻）', async () => {
     const oldAt = 2_000_000_000_000
     const newAt = 2_000_000_060_000
     const { orchestrator, scheduler, storage, askControl } = await buildScheduledOrchestrator({
@@ -1066,22 +1027,20 @@ describe('scheduled 恢复与到点触发', () => {
     })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
-    await orchestrator.applyPendingSchedule(newAt) // 用户在回显卡上改时间（settings 旁路）
-    askControl.resolveNext(answer('pae-approve', '批准'))
+    askControl.resolveNext(answer('pae-approve', '批准', `paeSchedule:at:${newAt}`))
     await revivePromise
     expect(storage.state?.phase).toBe('scheduled')
     expect(storage.state?.scheduledAt).toBe(newAt)
     expect(scheduler.arm).toHaveBeenLastCalledWith(newAt)
   })
 
-  it('revive 回显卡：改为立即批准 → 取消排期并立即执行', async () => {
+  it('revive 回显卡：批准载荷 now → 取消排期并立即执行', async () => {
     const at = 2_000_000_000_000
     const { orchestrator, agent, scheduler, storage, askControl } =
       await buildScheduledOrchestrator({ at, nowMs: at - 60_000 })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
-    await orchestrator.applyPendingSchedule(null) // 用户在回显卡上清为立即执行
-    askControl.resolveNext(answer('pae-approve', '批准'))
+    askControl.resolveNext(answer('pae-approve', '批准', 'paeSchedule:now'))
     await revivePromise
     await vi.waitFor(() => {
       expect(storage.state?.phase).toBe('executing')
@@ -1101,7 +1060,8 @@ describe('scheduled 恢复与到点触发', () => {
     const agent = new FakeAgent()
     const scheduler = fakeScheduler()
     const nowRef = { value: 1_700_000_000_000 }
-    const { ask } = fakeAsk(answer('pae-approve', '批准'))
+    const at = nowRef.value + 60_000
+    const { ask } = fakeAsk(answer('pae-approve', '批准', `paeSchedule:at:${at}`))
     const storage = new FakeStorage()
     const orchestrator = new Orchestrator({
       agent,
@@ -1115,8 +1075,6 @@ describe('scheduled 恢复与到点触发', () => {
     await orchestrator.begin('定时执行')
     // begin 已重置 planDir：步骤文件须在 begin 后写入（与 makeOrchestrator 同序）
     await writeFile(join(dir, 'a.md'), '# A\n内容', 'utf8')
-    const at = nowRef.value + 60_000
-    await orchestrator.applyPendingSchedule(at)
     const verdict = await orchestrator.submitPlan(dir, [{ file: 'a.md', title: 'A' }], 'S')
     expect(verdict).toEqual({ approved: true })
     expect(storage.state?.phase).toBe('scheduled')
@@ -1140,7 +1098,7 @@ describe('scheduled 恢复与到点触发', () => {
   })
 
   it('回显卡悬空期间到点触发（fire 胜出）→ 卡答案作废：不二次 run、scheduledAt 无脏写', async () => {
-    // 场景 1：悬空卡上清为立即（null 意图）+ 批准 → 复检阻止二次 run(plan,1) 双循环
+    // 场景 1：悬空卡的答案带 now 载荷 + fire 抢先 → 复检阻止二次 run(plan,1) 双循环
     const dir1 = await mkdtemp(join(tmpdir(), 'pae-sched-race-'))
     tempDirs.push(dir1)
     await writeFile(join(dir1, 'a.md'), '# A\n内容', 'utf8')
@@ -1172,7 +1130,6 @@ describe('scheduled 恢复与到点触发', () => {
     })
     const revive1 = orch1.revive()
     await vi.waitFor(() => expect(askControl1.receivedQuestions.length).toBe(1))
-    await orch1.applyPendingSchedule(null) // 卡悬空期间：用户清为立即执行（settings 旁路）
     nowRef.value = at + 1 // 拨快到点：fire 抢先启动执行并 abort 悬空卡
     expect(await orch1.fireScheduledRun()).toBe(true)
     await vi.waitFor(() => {
@@ -1180,8 +1137,8 @@ describe('scheduled 恢复与到点触发', () => {
       expect(agent1.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
     })
     const attempts = orch1.snapshot().stepAttempt
-    // 答案在 abort 前已 resolve 入队：宿主仍会投递；复检须使其作废
-    askControl1.resolveNext(answer('pae-approve', '批准'))
+    // 答案在 abort 前已 resolve 入队：宿主仍会投递；复检须使其作废（now 意图经答案载荷表达）
+    askControl1.resolveNext(answer('pae-approve', '批准', 'paeSchedule:now'))
     await revive1
     await new Promise((resolve) => setTimeout(resolve, 150)) // 留窗口：若复检缺失，二次 run 在此 steer 第 2 条指令
     expect(agent1.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1) // 未二次注入
@@ -1189,7 +1146,7 @@ describe('scheduled 恢复与到点触发', () => {
     expect(storage1.state?.phase).toBe('executing')
     expect(storage1.state?.scheduledAt).toBeUndefined()
 
-    // 场景 2：悬空卡上改新时间（number 意图）+ 批准 → 复检阻止 scheduledAt 脏写与重复 arm
+    // 场景 2：悬空卡的答案带新 at 载荷 + fire 抢先 → 复检阻止 scheduledAt 脏写与重复 arm
     const dir2 = await mkdtemp(join(tmpdir(), 'pae-sched-race-'))
     tempDirs.push(dir2)
     await writeFile(join(dir2, 'a.md'), '# A\n内容', 'utf8')
@@ -1220,10 +1177,9 @@ describe('scheduled 恢复与到点触发', () => {
     const revive2 = orch2.revive()
     await vi.waitFor(() => expect(askControl2.receivedQuestions.length).toBe(1))
     const newAt = at + 120_000
-    await orch2.applyPendingSchedule(newAt) // 卡悬空期间：用户改排期
     nowRef.value = at + 1
     expect(await orch2.fireScheduledRun()).toBe(true)
-    askControl2.resolveNext(answer('pae-approve', '批准'))
+    askControl2.resolveNext(answer('pae-approve', '批准', `paeSchedule:at:${newAt}`))
     await revive2
     await new Promise((resolve) => setTimeout(resolve, 150)) // 留窗口：若复检缺失，脏写在此落盘
     expect(storage2.state?.scheduledAt).toBeUndefined() // 无脏写回
@@ -1231,27 +1187,26 @@ describe('scheduled 恢复与到点触发', () => {
     expect(storage2.state?.phase).toBe('executing')
   })
 
-  it('回显卡驳回（回规划）即清意图：下一次 submitPlan 批准走立即执行（无排期泄漏）', async () => {
+  it('回显卡驳回（回规划）：下一次 submitPlan 批准无载荷 → 立即执行', async () => {
     const at = 2_000_000_000_000
     const { orchestrator, planDir, scheduler, storage, askControl } =
       await buildScheduledOrchestrator({ at, nowMs: at - 60_000 })
     const revivePromise = orchestrator.revive()
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(1))
-    await orchestrator.applyPendingSchedule(at + 120_000) // 回显卡上先改排期（settings 旁路）
-    askControl.resolveNext(answer('pae-approve', '继续修改')) // 随后驳回回规划 → 意图须随卡失效
+    askControl.resolveNext(answer('pae-approve', '继续修改')) // 驳回回规划（F-1 意图清场随 transient 字段移除自然消失）
     await revivePromise
     expect(storage.state?.phase).toBe('planning')
     expect(scheduler.cancel).toHaveBeenCalled()
     expect(scheduler.arm).toHaveBeenCalledTimes(1) // 仅 revive 分支前置 arm(at)
 
-    // 回到规划后的下一次审批：批准必须走立即执行（泄漏的 number 意图不得复活为 scheduled）
+    // 回到规划后的下一次审批（首卡语义）：批准无载荷 → 立即执行
     const submitPromise = orchestrator.submitPlan(planDir, [{ file: 'a.md', title: 'A' }], 'S')
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2))
     askControl.resolveNext(answer('pae-approve', '批准'))
     const verdict = await submitPromise
     expect(verdict).toEqual({ approved: true })
-    expect(storage.state?.phase).toBe('executing') // 泄漏意图已随驳回清掉 → 立即执行
+    expect(storage.state?.phase).toBe('executing')
     expect(storage.state?.scheduledAt).toBeUndefined()
-    expect(scheduler.arm).toHaveBeenCalledTimes(1) // 未对泄漏排期二次 arm
+    expect(scheduler.arm).toHaveBeenCalledTimes(1) // 未对任何排期二次 arm
   })
 })
