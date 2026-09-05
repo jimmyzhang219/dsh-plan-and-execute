@@ -8,6 +8,7 @@ import {
   planSummaryContextMessage,
   recoverInstruction,
   replanContextMessage,
+  replanDetailedInstruction,
   replanInstruction,
   resumePlanningInstruction,
   stepInstruction,
@@ -15,6 +16,7 @@ import {
   userTaskMessage,
   PLANNING_SECTION_BODY,
 } from '../src/prompts.ts'
+import { fakeImageBlock } from './helpers.ts'
 
 describe('section 正文', () => {
   it('planning 正文含 planDir、submit_plan 与文件命名要求', () => {
@@ -76,6 +78,34 @@ describe('注入消息', () => {
     const text = (message.content[0] as { text: string }).text
     expect(text).toBe('先计算1+1，得出结果后再加3')
     expect(message.source).toEqual({ kind: 'user' })
+  })
+  it('userTaskMessage 带图：图块在前、任务文字收尾；不带图输出保持纯文字', () => {
+    const img = fakeImageBlock('att-x')
+    const message = userTaskMessage('重构登录模块', [img])
+    expect(message.content).toHaveLength(2)
+    expect(message.content[0]).toEqual({ type: 'image', attachment: img.attachment })
+    expect(message.content[1]).toMatchObject({ type: 'text', text: '重构登录模块' })
+    const plain = userTaskMessage('重构登录模块')
+    expect(plain.content).toEqual([{ type: 'text', text: '重构登录模块' }])
+  })
+  it('replanDetailedInstruction 含用户反馈、原计划清单与指令语，source 为 plugin instruction', () => {
+    const message = replanDetailedInstruction('粒度太粗', {
+      planDir: '/p',
+      steps: [
+        { file: 'step-01-a.md', title: 'A' },
+        { file: 'step-02-b.md', title: 'B' },
+      ],
+    })
+    const text = (message.content[0] as { text: string }).text
+    expect(text).toContain('粒度太粗')
+    expect(text).toContain('原计划（共 2 步）')
+    expect(text).toContain('1. A（step-01-a.md）')
+    expect(text).toContain('重新调用 submit_plan 提交审批')
+    expect(message.source).toMatchObject({
+      kind: 'plugin',
+      plugin: 'dsh-plan-and-execute',
+      form: 'instructions',
+    })
   })
   it('kickoff 不含任务原文（任务在锚定的 userTaskMessage 中），含 planDir，source 标记为 plugin instruction', () => {
     const message = kickoffInstruction('重构登录模块', '/p')

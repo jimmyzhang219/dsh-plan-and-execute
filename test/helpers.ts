@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
@@ -23,6 +23,20 @@ export function fakeUserMessage(text: string): UserMessage {
       summary: text.slice(0, 40),
     },
   })
+}
+
+/** 构造测试用耐久图块（宿主准入后的 ImageBlock 形状；测试内无需真附件，品牌字段双断言放宽）。 */
+export function fakeImageBlock(id = 'att-1'): ImageBlock {
+  return {
+    type: 'image',
+    attachment: {
+      attachmentId: id,
+      mediaType: 'image/png',
+      bytes: 1234,
+      width: 640,
+      height: 480,
+    },
+  } as unknown as ImageBlock
 }
 
 export async function cleanupTempDirs(): Promise<void> {

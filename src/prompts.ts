@@ -2,7 +2,7 @@
  * 两阶段 system-prompt 正文与全部注入消息构造。纯函数。
  * @module dsh-plan-and-execute/prompts
  */
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import {
   PAE_PLUGIN,
@@ -22,10 +22,17 @@ function instruction(text: string, summary: string): UserMessage {
 /**
  * 构造用户任务原文消息：source.kind='user'，与 dsh 内置 /plan 命令同语义
  * （用户输入以用户身份进入轨迹「用户」行、参与标题派生）。
+ * 带图时图块在前、任务文字收尾（content=[图块…, 文字]，与宿主 /goal 组装序一致）。
+ * @param task - 用户任务文字（非空；命令层已校验）。
+ * @param images - 宿主准入的耐久图块（命令附件透传；缺省=纯文字任务）。
+ * @returns 用户任务消息。
  */
-export function userTaskMessage(task: string): UserMessage {
+export function userTaskMessage(task: string, images?: readonly ImageBlock[]): UserMessage {
   return createUserMessage({
-    content: [{ type: 'text', text: task }],
+    content:
+      images !== undefined && images.length > 0
+        ? [...images, { type: 'text', text: task }]
+        : [{ type: 'text', text: task }],
     source: { kind: 'user' },
   })
 }
@@ -175,6 +182,29 @@ export function replanInstruction(previousSteps: number): UserMessage {
     [
       `用户要求回到规划阶段（原有 ${previousSteps} 步的计划未通过/被中止；反馈见上方消息）。`,
       '请按反馈修改步骤 Markdown 文件（可增删改步骤），然后重新调用 submit_plan 提交审批。',
+    ].join('\n'),
+    'plan-and-execute：回到规划阶段',
+  )
+}
+
+/**
+ * 图文任务的 replan 合并重规划指令（正文 = 用户反馈 + 原计划清单 + 指令语）。
+ * 仅任务带图（taskImages 非空）分支使用：整面锚定图文任务消息后以本条单次
+ * steer（无图分支保持 replanContextMessage + replanInstruction 双消息形态）。
+ * @param feedback - 用户驳回/取消反馈文本（可空）。
+ * @param plan - 被驳回的原计划（反馈与清单展示用）。
+ * @returns 重规划指令消息。
+ */
+export function replanDetailedInstruction(feedback: string, plan: PaePlanPayload): UserMessage {
+  return instruction(
+    [
+      '[plan-and-execute 计划修订]',
+      `用户反馈：${feedback || '（无文字反馈）'}`,
+      `原计划（共 ${plan.steps.length} 步）：`,
+      ...plan.steps.map((step, index) => `${index + 1}. ${step.title}（${step.file}）`),
+      '',
+      `用户要求回到规划阶段（原有 ${plan.steps.length} 步的计划未通过/被中止）。`,
+      '请按反馈与任务原文/参考图修改步骤 Markdown 文件（可增删改步骤），然后重新调用 submit_plan 提交审批。',
     ].join('\n'),
     'plan-and-execute：回到规划阶段',
   )
