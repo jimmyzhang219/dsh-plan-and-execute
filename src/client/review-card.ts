@@ -161,3 +161,41 @@ export function encodeApprovalSchedule(
   if (when === hadScheduledAt) return undefined
   return `${PAE_SCHEDULE_PREFIX}at:${when}`
 }
+
+/** 排期浮层相对视口的 fixed 定位结果（left/top 均为 px）。 */
+export interface PickerPlacement {
+  /** 面板左缘距视口左缘（px）。 */
+  readonly left: number
+  /** 面板顶缘距视口顶缘（px）。 */
+  readonly top: number
+}
+
+/**
+ * 计算排期浮层面板相对视口的 fixed 定位：默认挂在锚点（chip）下方；下方放不下
+ * 且上方空间足够时向上翻转；两侧都不足时贴视口底边兜底。水平方向以锚点左缘
+ * 对齐，右缘溢出视口时左收（clamp）。返回的四舍五入到整数 px。
+ * @param anchor - 锚点（chip）相对视口的矩形：left/top/bottom 与 width。
+ * @param panel - 面板实测尺寸（width/height）。
+ * @param viewport - 视口尺寸（innerWidth/innerHeight）。
+ * @param gap - 面板与锚点的垂直间距（px，默认 4）。
+ * @returns fixed 定位的 left/top。
+ */
+export function placeSchedulePicker(
+  anchor: { left: number; bottom: number; top: number; width: number },
+  panel: { width: number; height: number },
+  viewport: { width: number; height: number },
+  gap = 4,
+): PickerPlacement {
+  // 默认锚点下方；右缘放不下时把 left 收进视口（两边各留 4px 呼吸）
+  const left = Math.min(Math.max(anchor.left, 4), viewport.width - panel.width - 4)
+  const belowTop = anchor.bottom + gap
+  let top = belowTop
+  if (belowTop + panel.height > viewport.height - 4) {
+    // 下方放不下：上方空间足够（顶距 ≥4）→ 上翻；否则贴底兜底（不遮锚点上越界）
+    top =
+      anchor.top - gap - panel.height >= 4
+        ? anchor.top - gap - panel.height
+        : Math.max(4, viewport.height - panel.height - 4)
+  }
+  return { left: Math.round(left), top: Math.round(top) }
+}

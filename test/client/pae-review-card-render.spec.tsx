@@ -333,6 +333,52 @@ describe('执行时间控件', () => {
     expect(screen.queryByTestId('schedule-picker')).toBeNull()
     expect(update).not.toHaveBeenCalled()
   })
+
+  it('浮层经 portal 渲染到 document.body（脱离 .pae-card overflow:hidden 裁剪范围）', () => {
+    openPanel()
+    const picker = pickerEl()
+    expect(picker.parentElement).toBe(document.body)
+    // 样式类与面板内部 DOM 结构保持既有约定
+    expect(picker.className).toContain('pae-schedule-picker')
+    expect(within(picker).getByTestId('schedule-mode-at')).toBeTruthy()
+  })
+
+  it('pointerdown 在面板/chip 外（document.body）→ 浮层失焦关闭，零 settings 写', () => {
+    const update = openPanel()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('pointerdown 在 chip 外的卡内其他区域（摘要文本）→ 浮层同样关闭', () => {
+    const update = openPanel()
+    fireEvent.pointerDown(screen.getByText('测试计划'))
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('pointerdown 落在面板或 chip 内 → 不关闭（真实点击序列先 pointerdown 后 click）', () => {
+    openPanel()
+    fireEvent.pointerDown(pickerEl())
+    expect(screen.queryByTestId('schedule-picker')).not.toBeNull()
+    // chip 上的 pointerdown 不触发失焦（收起由 chip 再点完成）
+    const chip = screen.getAllByRole('button', { name: /^立即执行$/ })[0]!
+    fireEvent.pointerDown(chip)
+    expect(screen.queryByTestId('schedule-picker')).not.toBeNull()
+    fireEvent.click(chip)
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+  })
+
+  it('窗口 resize 或任意元素 scroll（capture）→ 浮层关闭（防锚点错位）', () => {
+    openPanel()
+    fireEvent.resize(window)
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+    // 重新打开后再验证 scroll 收口（capture 监听挂 window，捕获任意滚动）
+    fireEvent.click(screen.getByRole('button', { name: /^立即执行$/ }))
+    expect(screen.queryByTestId('schedule-picker')).not.toBeNull()
+    fireEvent.scroll(document.body)
+    expect(screen.queryByTestId('schedule-picker')).toBeNull()
+  })
 })
 
 describe('PaeReviewCardView', () => {

@@ -5,6 +5,7 @@ import {
   isPlanReviewPending,
   parsePlanDetail,
   parseScheduleAt,
+  placeSchedulePicker,
   questionView,
 } from '../../src/client/review-card.ts'
 
@@ -141,5 +142,68 @@ describe('encodeApprovalSchedule', () => {
     expect(encodeApprovalSchedule(1_750_000_060_000, 1_750_000_000_000)).toBe(
       'paeSchedule:at:1750000060000',
     )
+  })
+})
+
+// 视口/面板/锚点均用纯数值；仅验证 placeSchedulePicker 输出（不依赖 jsdom 几何）。
+const VIEWPORT = { width: 1024, height: 768 }
+
+describe('placeSchedulePicker', () => {
+  it('下方空间够 → 锚点下方 anchor.bottom + gap', () => {
+    const anchor = { left: 100, top: 220, bottom: 300, width: 200 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 220 }, VIEWPORT)).toEqual({
+      left: 100,
+      top: 304, // 300 + 4；304+220=524 <= 768-4 不触发上翻
+    })
+  })
+  it('下方不够、上方够 → 上翻到 anchor.top - gap - height', () => {
+    const anchor = { left: 100, top: 520, bottom: 600, width: 200 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 220 }, VIEWPORT)).toEqual({
+      left: 100,
+      top: 296, // 上翻后 296+220=516 <= 764 且顶距 4
+    })
+  })
+  it('下方上方都不够 → 贴底兜底 max(4, height - panel.height - 4)', () => {
+    const anchor = { left: 100, top: 200, bottom: 280, width: 200 }
+    const viewport = { width: 1024, height: 400 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 220 }, viewport)).toEqual({
+      left: 100,
+      top: 176, // 400-220-4=176（上翻条件 200-4-220<4 不成立）
+    })
+  })
+  it('右缘溢出 → left 左收进视口（clamp 上限）', () => {
+    const anchor = { left: 900, top: 220, bottom: 300, width: 200 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 220 }, VIEWPORT)).toEqual({
+      left: 680, // 1024-340-4=680
+      top: 304,
+    })
+  })
+  it('clamp 下界：left 小于 4 → 4', () => {
+    const anchor = { left: -50, top: 220, bottom: 300, width: 200 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 220 }, VIEWPORT)).toEqual({
+      left: 4,
+      top: 304,
+    })
+  })
+  it('clamp 边界恰好容纳 → left 不动', () => {
+    const anchor = { left: 680, top: 220, bottom: 300, width: 200 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 220 }, VIEWPORT)).toEqual({
+      left: 680,
+      top: 304,
+    })
+  })
+  it('结果四舍五入取整（小数锚点坐标）', () => {
+    const anchor = { left: 10.4, top: 0.2, bottom: 10.6, width: 100 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 50 }, VIEWPORT)).toEqual({
+      left: 10, // round(10.4)
+      top: 15, // round(10.6+4)
+    })
+  })
+  it('自定义 gap 生效', () => {
+    const anchor = { left: 50, top: 220, bottom: 300, width: 200 }
+    expect(placeSchedulePicker(anchor, { width: 340, height: 100 }, VIEWPORT, 10)).toEqual({
+      left: 50,
+      top: 310,
+    })
   })
 })

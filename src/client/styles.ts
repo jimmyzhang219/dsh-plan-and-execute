@@ -49,7 +49,6 @@ const CSS = `
 }
 .pae-header-actions { margin-left: auto; display: flex; gap: 8px; }
 .pae-schedule {
-  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -69,11 +68,12 @@ const CSS = `
   cursor: pointer;
 }
 .pae-schedule-clear:hover { color: var(--dsw-alias-state-error-primary, #e5484d); }
+/* 浮层经 portal 渲染到 document.body，fixed 定位浮于卡片之上（脱离 .pae-card
+   overflow:hidden 裁剪——验收修复）。left/top 由组件按锚点实测计算写 inline style，
+   本块只给 fixed 基础：宽/内边距/阴影/圆角/配色与原先一致。 */
 .pae-schedule-picker {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   gap: 8px;
