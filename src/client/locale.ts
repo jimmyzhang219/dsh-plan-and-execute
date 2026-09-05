@@ -23,6 +23,8 @@ export const zh = {
   scheduleDate: '日期',
   scheduleTime: '时间',
   scheduleAtHint: '计划于 %s 执行', // chip 排期态模板（%s=YYYY-MM-DD HH:mm）
+  schedulePreview: '计划于 %s 执行', // 浮层状态行合法草稿预览模板（%s=YYYY-MM-DD HH:mm）
+  scheduleConfirm: '确定', // 浮层「确定」按钮（草稿完整且晚于当前时可用）
   schedulePast: '执行时间需晚于当前时刻',
   scheduleHint: '选择完整日期与时间后生效',
 }
@@ -42,6 +44,8 @@ export const en: Record<PaeCardKey, string> = {
   scheduleDate: 'Date',
   scheduleTime: 'Time',
   scheduleAtHint: 'Scheduled for %s',
+  schedulePreview: 'Scheduled for %s',
+  scheduleConfirm: 'OK',
   schedulePast: 'Execution time must be later than now',
   scheduleHint: 'Takes effect once a full date and time is selected',
 }

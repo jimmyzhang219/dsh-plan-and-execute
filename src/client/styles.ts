@@ -54,6 +54,11 @@ const CSS = `
   align-items: center;
   gap: 4px;
 }
+/* 排期 chip 加宽 + 不换行：让「计划于 YYYY-MM-DD HH:mm 执行」完整显示（验收反馈：控件太窄） */
+.pae-schedule-toggle {
+  min-width: 150px;
+  white-space: nowrap;
+}
 .pae-schedule-clear {
   padding: 0 6px;
   border: none;
@@ -72,6 +77,7 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 300px; /* 容纳日期/时间输入 + 状态行 + 操作行（验收反馈：浮层太窄） */
   padding: 10px 12px;
   background: var(--dsw-specific-input-major, #2a2a2e);
   border: 1px solid var(--dsw-alias-border-l1, currentColor);
@@ -88,6 +94,7 @@ const CSS = `
   color: var(--dsw-alias-label-secondary, inherit);
 }
 .pae-schedule-picker input {
+  width: 168px; /* 与加宽后的浮层匹配，原生控件自带图标不留空隙 */
   background: var(--dsw-alias-bg-base, transparent);
   color: var(--dsw-alias-label-primary, inherit);
   border: 1px solid var(--dsw-alias-border-l1, currentColor);
@@ -95,6 +102,23 @@ const CSS = `
   padding: 2px 6px;
   font-size: 13px;
   line-height: 18px;
+}
+/* 浮层状态行：默认弱化提示；合法=成功绿、非法=错误红 */
+.pae-schedule-status {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary, inherit);
+}
+.pae-schedule-status--ok {
+  color: var(--dsw-alias-state-success-primary, #46a758);
+}
+.pae-schedule-status--err {
+  color: var(--dsw-alias-state-error-primary, #e5484d);
+}
+.pae-schedule-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .pae-body {
   flex: 1 1 auto;

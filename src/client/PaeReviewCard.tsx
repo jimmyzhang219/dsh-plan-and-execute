@@ -119,6 +119,8 @@ export function PaeReviewCard({
   const [error, setError] = useState<string | null>(null)
   const [when, setWhen] = useState<number | null>(scheduledAt ?? null) // null=立即
   const [pickerOpen, setPickerOpen] = useState(false)
+  // 浮层草稿态（date/time 变更不自动提交，经「确定」才写排期）；初始 = 回显排期，无则空，
+  // chip 每次展开时重置为当前 when（togglePicker）。
   const [datePart, setDatePart] = useState(() =>
     scheduledAt === undefined ? '' : splitLocal(scheduledAt).datePart,
   )
@@ -181,21 +183,40 @@ export function PaeReviewCard({
       .update(PAE_SCHEDULE_NS, buildSchedulePatch(sessionId, at), undefined)
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
   }
-  /** 组合日期时间并校验；合法则静默写排期并更新 chip。 */
-  const commitSchedule = (datePart: string, timePart: string): void => {
-    const at = composeAt(datePart, timePart)
-    if (at === undefined) {
-      setError(t('scheduleHint'))
-      return
+  /** 草稿组合时间（date/time 输入只改草稿态，不自动提交）。 */
+  const draftAt = composeAt(datePart, timePart)
+  /** 草稿完整且晚于当前时刻（「确定」可用与绿色预览的共用条件）。 */
+  const draftReady = draftAt !== undefined && draftAt > Date.now()
+  /** 浮层状态行修饰类：合法=--ok、过去=--err、不完整=无（弱化提示）。 */
+  const draftStatusMod = draftAt === undefined ? '' : draftReady ? '--ok' : '--err'
+  /** 浮层状态行文案：完整且未来=绿色预览 / 完整但过去=红色错误 / 不完整=弱化提示。 */
+  const draftStatusText =
+    draftAt === undefined
+      ? t('scheduleHint')
+      : draftReady
+        ? t('schedulePreview').replace('%s', formatLocal(draftAt))
+        : t('schedulePast')
+  /** chip 点击：切换浮层开合；展开时草稿重置为当前排期（无排期则日期/时间清空）。 */
+  const togglePicker = (): void => {
+    if (!pickerOpen) {
+      if (when === null) {
+        setDatePart('')
+        setTimePart('')
+      } else {
+        const parts = splitLocal(when)
+        setDatePart(parts.datePart)
+        setTimePart(parts.timePart)
+      }
     }
-    if (at <= Date.now()) {
-      setError(t('schedulePast'))
-      return
-    }
+    setPickerOpen((open) => !open)
+  }
+  /** 「确定」按钮：草稿完整且晚于当前才提交（与按钮禁用态同条件）；写排期并关浮层。 */
+  const commitSchedule = (): void => {
+    if (draftAt === undefined || !draftReady) return
     setError(null)
-    setWhen(at)
+    setWhen(draftAt)
     setPickerOpen(false)
-    pushSchedule(at)
+    pushSchedule(draftAt)
   }
   /** 清除排期（立即执行）：浮层按钮与 chip 的 × 共用。 */
   const clearSchedule = (): void => {
@@ -224,7 +245,8 @@ export function PaeReviewCard({
               <Button
                 size="sm"
                 variant={when === null ? 'outline' : 'toolbar'}
-                onClick={() => setPickerOpen((open) => !open)}
+                className="pae-schedule-toggle"
+                onClick={togglePicker}
               >
                 {when === null
                   ? t('scheduleNow')
@@ -242,16 +264,14 @@ export function PaeReviewCard({
               ) : null}
               {pickerOpen ? (
                 <div className="pae-schedule-picker" data-testid="schedule-picker">
+                  {/* date/time 只进草稿态：提交必须经「确定」按钮（显式保存入口） */}
                   <label>
                     {t('scheduleDate')}
                     <input
                       type="date"
                       aria-label={t('scheduleDate')}
                       value={datePart}
-                      onChange={(e) => {
-                        setDatePart(e.target.value)
-                        commitSchedule(e.target.value, timePart)
-                      }}
+                      onChange={(e) => setDatePart(e.target.value)}
                     />
                   </label>
                   <label>
@@ -260,20 +280,35 @@ export function PaeReviewCard({
                       type="time"
                       aria-label={t('scheduleTime')}
                       value={timePart}
-                      onChange={(e) => {
-                        setTimePart(e.target.value)
-                        commitSchedule(datePart, e.target.value)
-                      }}
+                      onChange={(e) => setTimePart(e.target.value)}
                     />
                   </label>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    data-testid="schedule-now"
-                    onClick={clearSchedule}
+                  {/* 草稿即时反馈状态行（取代卡底 .pae-error 承担排期校验文案） */}
+                  <div
+                    className={`pae-schedule-status${draftStatusMod}`}
+                    data-testid="schedule-status"
                   >
-                    {t('scheduleNow')}
-                  </Button>
+                    {draftStatusText}
+                  </div>
+                  <div className="pae-schedule-picker-actions">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid="schedule-now"
+                      onClick={clearSchedule}
+                    >
+                      {t('scheduleNow')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      data-testid="schedule-commit"
+                      disabled={!draftReady}
+                      onClick={commitSchedule}
+                    >
+                      {t('scheduleConfirm')}
+                    </Button>
+                  </div>
                 </div>
               ) : null}
             </span>
