@@ -2,36 +2,58 @@
  * 两阶段 system-prompt 正文与全部注入消息构造。纯函数。
  * @module dsh-plan-and-execute/prompts
  */
-import { createUserMessage, type ImageBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+
+/**
+ * 声明本插件的消息生产者 kind（宿主 MessageSourceMap 合并扩展点；键须为字面量，
+ * 与 state.ts 的 PAE_SOURCE_KIND 同值）。会话格式 v4 起 source.kind 必须是生产
+ * 者自有 kind，`plugin` 这类笼统归属被拒绝。
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'plugin:dsh-plan-and-execute': {
+      kind: 'plugin:dsh-plan-and-execute'
+      /** 宿主 ContextForm：不透明呈现（插件自身不提供 changes/catalog 结构）。 */
+      form?: 'instructions'
+      /** 行摘要文本（宿主仅对 notice 形态读取，其余形态作为不透明元数据保留）。 */
+      summary?: string
+    }
+  }
+}
+
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import {
-  PAE_PLUGIN,
+  PAE_SOURCE_KIND,
   type PaePlanPayload,
   type PaeStepReportPayload,
   type PlanStep,
+  type TaskAttachment,
 } from './state.ts'
 
-/** 构造插件注入消息：source.kind='plugin'（不参与 dsh 用户消息语义，如自动标题派生）。 */
+/** 构造插件注入消息：source.kind 为插件自有 kind（不参与 dsh 用户消息语义，如自动标题派生）。 */
 function instruction(text: string, summary: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: PAE_PLUGIN, form: 'instructions', summary },
+    source: { kind: PAE_SOURCE_KIND, form: 'instructions', summary },
   })
 }
 
 /**
  * 构造用户任务原文消息：source.kind='user'，与 dsh 内置 /plan 命令同语义
  * （用户输入以用户身份进入轨迹「用户」行、参与标题派生）。
- * 带图时图块在前、任务文字收尾（content=[图块…, 文字]，与宿主 /goal 组装序一致）。
+ * 带附件时附件块在前、任务文字收尾（content=[附件块…, 文字]，与宿主 /goal 组装序一致）。
  * @param task - 用户任务文字（非空；命令层已校验）。
- * @param images - 宿主准入的耐久图块（命令附件透传；缺省=纯文字任务）。
+ * @param attachments - 宿主准入的耐久附件块（命令附件透传；缺省=纯文字任务）。
  * @returns 用户任务消息。
  */
-export function userTaskMessage(task: string, images?: readonly ImageBlock[]): UserMessage {
+export function userTaskMessage(
+  task: string,
+  attachments?: readonly TaskAttachment[],
+): UserMessage {
   return createUserMessage({
     content:
-      images !== undefined && images.length > 0
-        ? [...images, { type: 'text', text: task }]
+      attachments !== undefined && attachments.length > 0
+        ? [...attachments, { type: 'text', text: task }]
         : [{ type: 'text', text: task }],
     source: { kind: 'user' },
   })

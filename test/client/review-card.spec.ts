@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildSettingsPatch,
   encodeApprovalSchedule,
   isPlanReviewPending,
   nextFullHour,
@@ -53,14 +52,6 @@ describe('questionView', () => {
   it('形状不符返回 undefined', () => {
     expect(questionView([])).toBeUndefined()
     expect(questionView([{ id: 'x' }])).toBeUndefined()
-  })
-})
-
-describe('buildSettingsPatch', () => {
-  it('sessionId 键 + serializeStepModels 结果', () => {
-    expect(buildSettingsPatch('sess-1', { 1: 'a|m1' })).toEqual({
-      'sess-1': { 1: { provider: 'a', model: 'm1' } },
-    })
   })
 })
 

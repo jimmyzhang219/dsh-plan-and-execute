@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import type { Orchestrator } from '../src/orchestrator.ts'
+import { PAE_SOURCE_KIND } from '../src/state.ts'
 import {
   answer,
   cleanupTempDirs,
@@ -73,13 +74,12 @@ describe('主执行路径', () => {
       storage,
     })
     await orchestrator.begin('做某事')
-    // 用户原文（kind=user）+ kickoff 指令（kind=plugin）两条注入
+    // 用户原文（kind=user）+ kickoff 指令（插件自有 kind）两条注入
     expect(agent.steered).toHaveLength(2)
     expect(agent.steered[0]!.source).toEqual({ kind: 'user' })
     expect((agent.steered[0]!.content[0] as { text: string }).text).toBe('做某事')
     expect(agent.steered[1]!.source).toMatchObject({
-      kind: 'plugin',
-      plugin: 'dsh-plan-and-execute',
+      kind: PAE_SOURCE_KIND,
     })
     expect(storage.state?.phase).toBe('planning')
     expect(storage.state?.task).toBe('做某事')
@@ -132,7 +132,7 @@ describe('主执行路径', () => {
       { content: '2. B', status: 'completed' },
     ])
     // kickoff + 两条步骤指令
-    expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(3)
+    expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(3)
   })
 
   it('submitPlan 驳回：反馈文本返回给工具层抛错', async () => {
@@ -855,6 +855,49 @@ describe('消息隔离（surface 锚定）', () => {
     expect(step2Context).toContain('完成 A')
   })
 
+  it('系统提示占 surface node 0（宿主 0.1.7）→ 整面锚定绕开该系统节点', async () => {
+    const { orchestrator, agent } = await makeOrchestrator(
+      [{ file: 'a.md', title: 'A' }],
+      [answer('pae-approve', '批准')],
+    )
+    // 宿主 0.1.7：首次模型请求后系统提示落为 surface node 0（只允许 system/message 覆盖它）
+    agent.session.nodes.unshift(900)
+    agent.session.systemHead = true
+    const shadowable = agent.session.nodes.filter((seq) => seq !== 900)
+    await orchestratorTurn(
+      orchestrator,
+      agent,
+      'completed',
+      { status: 'success', summary: '完成 A' },
+      1,
+      1,
+    )
+    const call = agent.session.replaceCalls.at(-1)!
+    expect(call.start).not.toBe(900)
+    expect(call.sourceEventSeqs).not.toContain(900)
+    // 其余节点（任务原文 + kickoff + 步骤指令）照常遮蔽
+    expect(call.start).toBe(shadowable[0])
+    expect(call.sourceEventSeqs).toEqual(shadowable)
+  })
+
+  it('surface 仅有系统提示节点 → 不 replace，仅注入（无模型历史可遮蔽）', async () => {
+    const { Orchestrator } = await import('../src/orchestrator.ts')
+    const agent = new FakeAgent()
+    const { ask } = fakeAsk()
+    const orchestrator = new Orchestrator({
+      agent,
+      ask,
+      config: { onStepFailure: 'pause', maxAutoRecoveries: 2, planRoot: '.pae' },
+      planDir: '/tmp/pae-test-plan',
+      storage: new FakeStorage(),
+    })
+    agent.session.nodes.push(900)
+    agent.session.systemHead = true
+    await orchestrator.begin('做某事')
+    expect(agent.session.replaceCalls).toHaveLength(0)
+    expect(agent.steered).toHaveLength(2) // 任务原文 + kickoff
+  })
+
   it('nudge/recover/retry 不产生新锚定（同一步上下文保持）', async () => {
     // nudge 路径：缺报追问只 steer
     const { orchestrator: orch1, agent: agent1 } = await makeOrchestrator(
@@ -1026,7 +1069,7 @@ describe('批准时定时执行', () => {
     // 等待期（scheduled 阶段）不写宿主 todo 卡：批准后零次 todo/write
     expect(agent.session.todosWrites).toHaveLength(0)
     // 未启动 run：除 kickoff 外没有步骤指令注入
-    expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(1)
     // 常驻回显卡：批准后同一流程弹第二次 plan-review ask（detail 含执行排期行）
     await vi.waitFor(() => expect(askControl.receivedQuestions.length).toBe(2))
     const persistent = askControl.receivedQuestions[1]![0]!
@@ -1039,7 +1082,7 @@ describe('批准时定时执行', () => {
     expect(storage.state?.phase).toBe('scheduled')
     expect(storage.state?.scheduledAt).toBe(at)
     expect(scheduler.arm).toHaveBeenCalledTimes(1) // kept 不重 arm
-    expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+    expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(1)
     expect(agent.session.todosWrites).toHaveLength(0)
   })
 
@@ -1058,7 +1101,7 @@ describe('批准时定时执行', () => {
     expect(scheduler.cancel).toHaveBeenCalled()
     // 转 executing 即写宿主 todo：all-pending 快照 → run 首步 mark(in_progress)
     await vi.waitFor(() => {
-      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(2)
+      expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(2)
     })
     expect(agent.session.todosWrites[0]).toEqual([{ content: '1. A', status: 'pending' }])
     expect(agent.session.todosWrites.at(-1)).toEqual([{ content: '1. A', status: 'in_progress' }])
@@ -1207,7 +1250,7 @@ describe('scheduled 恢复与到点触发', () => {
     expect(scheduler.cancel).toHaveBeenCalled()
     // 第一步指令已注入（kickoff 之外的第一条插件指令；run 首步 readFile 为 macrotask，需 waitFor 真证注入）
     await vi.waitFor(() => {
-      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+      expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(1)
     })
   })
 
@@ -1267,7 +1310,7 @@ describe('scheduled 恢复与到点触发', () => {
     expect(scheduler.cancel).toHaveBeenCalled()
     // 首步指令注入同受 readFile macrotask 制约，需 waitFor 真证注入
     await vi.waitFor(() => {
-      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+      expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(1)
     })
   })
 
@@ -1309,7 +1352,7 @@ describe('scheduled 恢复与到点触发', () => {
     expect(storage.state?.scheduledAt).toBeUndefined()
     // kickoff + 首步指令（run 首步 readFile 为 macrotask，需 waitFor 真证注入）
     await vi.waitFor(() => {
-      expect(agent.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(2)
+      expect(agent.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(2)
     })
 
     // 二次触发（阶段已 executing）：幂等拒绝
@@ -1353,14 +1396,14 @@ describe('scheduled 恢复与到点触发', () => {
     expect(await orch1.fireScheduledRun()).toBe(true)
     await vi.waitFor(() => {
       // run 唯一一次启动：首步指令注入（readFile 为 macrotask，需 waitFor）
-      expect(agent1.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1)
+      expect(agent1.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(1)
     })
     const attempts = orch1.snapshot().stepAttempt
     // 答案在 abort 前已 resolve 入队：宿主仍会投递；复检须使其作废（now 意图经答案载荷表达）
     askControl1.resolveNext(answer('pae-approve', '批准', 'paeSchedule:now'))
     await revive1
     await new Promise((resolve) => setTimeout(resolve, 150)) // 留窗口：若复检缺失，二次 run 在此 steer 第 2 条指令
-    expect(agent1.steered.filter((m) => m.source.kind === 'plugin')).toHaveLength(1) // 未二次注入
+    expect(agent1.steered.filter((m) => m.source.kind === PAE_SOURCE_KIND)).toHaveLength(1) // 未二次注入
     expect(orch1.snapshot().stepAttempt).toBe(attempts) // stepAttempt 不再增长
     expect(storage1.state?.phase).toBe('executing')
     expect(storage1.state?.scheduledAt).toBeUndefined()

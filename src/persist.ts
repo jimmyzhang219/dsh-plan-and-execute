@@ -6,7 +6,6 @@
  */
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type {
   PaePausedReason,
@@ -14,6 +13,7 @@ import type {
   PaePlanPayload,
   PaeStepModel,
   PaeStepReportPayload,
+  TaskAttachment,
 } from './state.ts'
 
 /** JSON 安全的编排状态快照（Map/Set 已转 Record/数组）。 */
@@ -22,8 +22,8 @@ export interface PersistedOrchestratorState {
   readonly phase: PaePhase
   /** 编排任务文本（用户输入）。 */
   readonly task?: string
-  /** 启动命令携带的任务参考图（宿主准入的耐久 image 块；replan/revive 重锚用）。 */
-  readonly taskImages?: readonly ImageBlock[]
+  /** 启动命令携带的任务附件块（宿主准入的耐久 image/file 块；replan/revive 重锚用）。 */
+  readonly taskImages?: readonly TaskAttachment[]
   /** 计划目录。 */
   readonly planDir?: string
   /** 当前步骤号（1-based；planning 阶段为 undefined）。 */
@@ -96,7 +96,7 @@ export function fileStorage(planDir: string): PersistedStorage {
 export function snapshotState(state: {
   phase: PaePhase | 'none'
   task?: string
-  taskImages?: readonly ImageBlock[]
+  taskImages?: readonly TaskAttachment[]
   planDir?: string
   stepIndex?: number
   pausedReason?: PaePausedReason

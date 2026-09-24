@@ -7,28 +7,41 @@
  * （todo/write、turn/* 等）。
  * @module dsh-plan-and-execute/state
  */
+import type { FileBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
-/** 插件标识（消息 source.plugin、编排目录命名空间）。 */
+/** 插件标识（消息 source.kind 命名空间、编排目录命名空间）。 */
 export const PAE_PLUGIN = 'dsh-plan-and-execute'
 
 /**
- * 每步模型选择的 settings 命名空间名（全局用户配置，按 sessionId 分键）。
- * 定义在本文件（无运行时依赖）：宿主 settings.ts 与 client half 都引用它，
- * 放在带 schemastery 值导入的 settings.ts 会把该依赖拖进浏览器 bundle。
- * 品牌类型仅 type-only 导入（构建时擦除），不产生运行时 require。
+ * 插件注入消息的 source.kind。宿主会话格式 v4 起拒绝笼统的 `plugin`（迁移已把
+ * 已发布插件包装改写为生产者自有 kind），要求写入方自带生产者 kind；沿用宿主对
+ * 第三方生产者的命名空间形态 `plugin:<插件名>`——与宿主 V3→V4 迁移为本插件历史
+ * 消息改写出的 kind 一致，新旧记录同一身份。
  */
-export const PAE_MODELS_NS = 'pae-step-models' as SettingsNamespace
+export const PAE_SOURCE_KIND = `plugin:${PAE_PLUGIN}`
+
+/** 任务附件块（命令准入后的耐久 image/file 块；随任务文本重锚回放）。 */
+export type TaskAttachment = ImageBlock | FileBlock
 
 /**
- * 会话查看脉冲的 settings 命名空间名（全局用户配置，按 sessionId 分键）。
- * client half 在会话每次被查看（含无 pending 的打开/刷新重挂载）时写一次
- * 时间戳脉冲，宿主 settings.ts 桥接据此对 scheduled 等待期会话重弹回显卡。
- * 定义在本文件（无运行时依赖）的原因同 PAE_MODELS_NS（宿主与 client 共用）。
+ * 每步模型选择的通道字段名（客户端写入的插件 profile 条目 volatile 字段）。
+ * 形状：sessionId → 步骤号(数字字符串) → {provider, model}。
+ * client half 经 ctx.remote.settings.update 稀疏合并写入，宿主读同一 Config 引用的
+ * .get()（见 index.ts 的段落注释）；字段名同时是客户端定位插件条目的依据。
+ * 定义在本文件（无运行时依赖）：宿主 settings.ts 与 client half 共用，放在带
+ * schemastery 值导入的 settings.ts 会把该依赖拖进浏览器 bundle。
  */
-export const PAE_PING_NS = 'pae-ping' as SettingsNamespace
+export const PAE_STEP_MODELS_FIELD = 'paeStepModels'
+
+/**
+ * 会话查看脉冲的通道字段名（客户端写入的插件 profile 条目 volatile 字段）。
+ * 形状：sessionId → {t: epoch ms}。client half 在会话每次被查看（含无 pending 的
+ * 打开/刷新重挂载）时写一次时间戳脉冲，宿主据此对 scheduled 等待期会话重弹回显卡。
+ * 定义在本文件（无运行时依赖）的原因同 PAE_STEP_MODELS_FIELD（宿主与 client 共用）。
+ */
+export const PAE_PINGS_FIELD = 'paeSessionPings'
 
 /** 编排阶段：planning（规划）→ scheduled（已批准待定时执行）→ executing（执行，可暂停）→ completed/aborted（终态）。 */
 export type PaePhase = 'planning' | 'scheduled' | 'executing' | 'paused' | 'completed' | 'aborted'

@@ -22,6 +22,8 @@ npx @deepseek-ai/dsh plugin --profile web add dsh-plan-and-execute
 npx @deepseek-ai/dsh web
 ```
 
+> 需要 dsh **0.1.7 及以上**（本版按会话格式 v4 的 source 生产者归属、系统提示占 surface node 0、settings volatile 配置字段适配）。更早的 dsh 请安装 `dsh-plan-and-execute@0.5.0`。
+
 ## 使用方式
 
 在 Web UI 对话框里输入 `/plan-and-execute 提示词...`

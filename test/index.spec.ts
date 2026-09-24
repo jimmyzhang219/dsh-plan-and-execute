@@ -6,8 +6,9 @@ import type { Mock } from 'vitest'
 import type { AskUserQuestionAnswer } from '@deepseek-ai/dsh-user-questions'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Config } from '../src/index.ts'
 import type { PersistedOrchestratorState } from '../src/persist.ts'
-import { PAE_MODELS_NS, PAE_PING_NS, type PaePhase } from '../src/state.ts'
+import { type PaePhase } from '../src/state.ts'
 import { fakeImageBlock } from './helpers.ts'
 
 /** 最小假 ctx：捕获注册项。inject 同步执行 setup 并回传 ctx 本体。 */
@@ -38,8 +39,6 @@ function fakeCtx() {
       model: c.model,
     })),
   }
-  /** settings 假服务：register 逐用例可改写（抛错模拟重复注册降级路径；ns 供按命名空间挑错）。 */
-  const settings = { register: vi.fn((_ns: string) => {}) }
   /**
    * agents 假服务：resume 记录调用（冷会话补执行路径；fire 由注册表驱动、
    * 其行为在 schedule.spec 覆盖）。
@@ -55,11 +54,9 @@ function fakeCtx() {
      */
     workspaceRegistry: undefined as { archivedSessionIds: readonly string[] } | undefined,
     sessionPersistence: undefined as
-      | { list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>> }
-      | undefined,
+      { list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>> } | undefined,
     sessionTitle,
     llm,
-    settings,
     agents,
     commands: {
       register: (definition: Record<string, unknown>) => {
@@ -91,7 +88,6 @@ function fakeCtx() {
     get: vi.fn<(key: string) => unknown>((key) => {
       if (key === 'sessionTitle') return sessionTitle
       if (key === 'llm') return llm
-      if (key === 'settings') return settings
       if (key === 'agents') return agents
       return { ask: async () => ({ answers: [] }) }
     }),
@@ -112,6 +108,10 @@ afterAll(async () => {
 const fakeAgent = (_phase: 'none' | PaePhase) => {
   /** 会话日志底（宿主 Session 为追加型；测试换底以注入 plan/mode 等事件）。 */
   let events: SessionEvent[] = []
+  /** surface 节点（测试可推入；宿主 0.1.7 起系统提示占 node 0）。 */
+  let surfaceNodes: number[] = []
+  /** 模型投影（hasSystemHead 只读首条 role）。 */
+  let derived: Array<{ role: string }> = []
   return {
     id: 'sess-1',
     status: 'idle',
@@ -126,13 +126,25 @@ const fakeAgent = (_phase: 'none' | PaePhase) => {
     session: {
       id: 'sess-1',
       header: { cwd },
-      surface: { nodes: [], replaceGeneration: 0 },
-      append: vi.fn((_type: string, _data: object) => {}),
+      surface: {
+        get nodes(): readonly number[] {
+          return surfaceNodes
+        },
+        replaceGeneration: 0,
+      },
+      append: vi.fn((_type: string, _data: object): unknown => undefined),
       // 当前宿主 Session 形状：无 .events 属性，snapshotEvents() 返回全量日志只读快照
       snapshotEvents: () => [...events],
+      // 宿主模型投影（hasSystemHead 的判定依据；测试专用可写）
+      deriveMessages: () => derived,
       // 测试专用：整体替换事件日志（宿主 Session 无此方法）
       seedEvents: (next: readonly SessionEvent[]) => {
         events = [...next]
+      },
+      /** 测试专用：布置 surface 节点与模型投影（同长度，首条 role 决定系统头判定）。 */
+      seedSurface: (nodes: readonly number[], roles: readonly string[]) => {
+        surfaceNodes = [...nodes]
+        derived = roles.map((role) => ({ role }))
       },
     },
   }
@@ -176,10 +188,82 @@ async function fireCreated(
   })
 }
 
-/** 取 settings/updated 桥接监听器（命令已删除，桥接是唯一写路径）。 */
-function settingsListenerOf(ctx: ReturnType<typeof fakeCtx>) {
-  return ctx.listeners.find((l) => l.event === 'settings/updated')?.handler as
-    ((ns: string, next: unknown, prev: unknown, source: string) => Promise<unknown>) | undefined
+/** 取 loader/volatile-update 监听器（volatile 通道值提交后宿主唯一的派发路径）。 */
+function volatileListenerOf(ctx: ReturnType<typeof fakeCtx>) {
+  return ctx.listeners.find((l) => l.event === 'loader/volatile-update')?.handler as
+    (() => void) | undefined
+}
+
+/** 通道假引用：宿主 volatile Config 语义（get 读当前值；测试用 set 模拟 loader 就地提交）。 */
+interface FakeVolatile<T> {
+  get(): T
+  set(next: T): void
+}
+
+/** 步模型通道载荷（与 Config.paeStepModels 同形）。 */
+type StepModelsValue = Record<string, Record<string, { provider: string; model: string }>>
+
+/** 会话查看脉冲通道载荷（与 Config.paeSessionPings 同形）。 */
+type PingsValue = Record<string, { t: number }>
+
+/** 可喂值的插件配置（两个通道引用默认空表）。 */
+type ChannelConfig = Config & {
+  paeStepModels: FakeVolatile<StepModelsValue>
+  paeSessionPings: FakeVolatile<PingsValue>
+}
+
+/** 建可喂值配置（测试直接 set 通道值再触发 volatile 监听器）。 */
+function channelConfig(): ChannelConfig {
+  const ref = <T>(value: T): FakeVolatile<T> => {
+    let current = value
+    return {
+      get: () => current,
+      set: (next) => {
+        current = next
+      },
+    }
+  }
+  return {
+    onStepFailure: 'pause',
+    maxAutoRecoveries: 2,
+    planDir: '.pae',
+    paeStepModels: ref<StepModelsValue>({}),
+    paeSessionPings: ref<PingsValue>({}),
+  }
+}
+
+/**
+ * 喂一次步模型通道值并触发宿主派发（宿主应用是异步 fire-and-forget，调用方自行等可观测效果）。
+ * @param ctx - 假 ctx（取 volatile 监听器）。
+ * @param config - channelConfig() 产物（通道引用）。
+ * @param sessionId - 会话键。
+ * @param section - 该会话的步骤号 → 模型。
+ */
+function feedStepModels(
+  ctx: ReturnType<typeof fakeCtx>,
+  config: ChannelConfig,
+  sessionId: string,
+  section: StepModelsValue[string],
+): void {
+  config.paeStepModels.set({ [sessionId]: section })
+  volatileListenerOf(ctx)!()
+}
+
+/**
+ * 喂一次会话查看脉冲并触发宿主派发。
+ * @param ctx - 假 ctx（取 volatile 监听器）。
+ * @param config - channelConfig() 产物（通道引用）。
+ * @param sessionId - 会话键。
+ * @param at - 脉冲时刻（epoch ms）。
+ */
+function feedPing(
+  ctx: ReturnType<typeof fakeCtx>,
+  config: ChannelConfig,
+  sessionId: string,
+  at: number,
+): void {
+  config.paeSessionPings.set({ [sessionId]: { t: at } })
+  volatileListenerOf(ctx)!()
 }
 
 describe('apply 装配', () => {
@@ -219,7 +303,8 @@ describe('apply 装配', () => {
 
     const planMode = fakeAgent('none')
     planMode.session.seedEvents([
-      { seq: 1, type: 'plan/mode', data: { active: true } } as SessionEvent,
+      // plan/mode 不在本工程编译单元的 SessionEventMap（宿主 plan-mode 拥有），双断言放宽
+      { seq: 1, time: 0, type: 'plan/mode', data: { active: true } } as unknown as SessionEvent,
     ])
     await expect(handler({ agent: planMode, rawInput: '做点事' })).resolves.toMatchObject({
       kind: 'error',
@@ -245,12 +330,66 @@ describe('apply 装配', () => {
     expect(agent.steer).toHaveBeenCalledTimes(2)
   })
 
-  it('命令声明 input.images: true；带图启动 → 锚定消息图块在前 + 落盘 taskImages', async () => {
+  it('驱动适配器暴露实时事件视图（创建后追加的 turn/end 必须可见，否则 settle 分类失准）', async () => {
+    const { toDriveAgent } = await import('../src/index.ts')
+    const agent = fakeAgent('none')
+    const drive = toDriveAgent(agent as never)
+    expect(drive.session.events).toHaveLength(0)
+    // 适配器创建之后会话才追加回合边界（真实宿主：step 期间产生）
+    agent.session.seedEvents([
+      {
+        seq: 1,
+        time: 0,
+        type: 'turn/end',
+        data: { turn: 1, reason: { kind: 'aborted' } },
+      } as unknown as SessionEvent,
+    ])
+    expect(drive.session.events).toHaveLength(1)
+  })
+
+  it('锚定绕开系统提示节点（宿主 0.1.7：系统提示占 surface node 0，只允许 system/message 覆盖它）', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    const agent = fakeAgent('none')
+    // 既有历史：系统提示（seq 7）+ 两条旧消息
+    agent.session.seedSurface([7, 8, 9], ['system', 'user', 'assistant'])
+    agent.session.append.mockReturnValue({ seq: 10 })
+    await handler({ agent, rawInput: '重构登录模块' })
+    // 整面 replace 从首个非系统节点开始：system node 7 不在遮蔽区间内
+    expect(agent.session.append).toHaveBeenCalledWith('user/message', expect.anything(), {
+      surfaceOp: { op: 'replace', startSeq: 8, endSeq: 9 },
+      sourceEventSeqs: [8, 9],
+    })
+  })
+
+  it('系统提示为唯一表面节点 → 不 replace（无模型历史可遮蔽），仅 steer', async () => {
+    const { apply } = await import('../src/index.ts')
+    const ctx = fakeCtx()
+    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const handler = ctx.registered.commands[0]!.handler as (
+      invocation: Record<string, unknown>,
+    ) => Promise<unknown>
+    const agent = fakeAgent('none')
+    agent.session.seedSurface([7], ['system'])
+    await handler({ agent, rawInput: '重构登录模块' })
+    expect(agent.session.append).not.toHaveBeenCalledWith(
+      'user/message',
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(agent.steer).toHaveBeenCalledTimes(2)
+  })
+
+  it('命令声明 input.attachments: true；带附件启动 → 锚定消息附件块在前 + 落盘 taskImages', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
     apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
     const definition = ctx.registered.commands[0]!
-    expect(definition.input).toEqual({ hint: '<任务描述>', images: true })
+    expect(definition.input).toEqual({ hint: '<任务描述>', attachments: true })
     const handler = definition.handler as (invocation: Record<string, unknown>) => Promise<unknown>
     const agent = fakeAgent('none')
     const img = fakeImageBlock('att-entry')
@@ -258,8 +397,7 @@ describe('apply 装配', () => {
     expect(result).toMatchObject({ kind: 'success' })
     // 首条注入 = 任务图文（图块在前、文字收尾），其后 = kickoff 指令
     const first = agent.steer.mock.calls[0]?.[0] as
-      | { content: Array<{ type: string; text?: string }> }
-      | undefined
+      { content: Array<{ type: string; text?: string }> } | undefined
     expect(first?.content[0]).toMatchObject({ type: 'image' })
     expect(first?.content[1]).toMatchObject({ type: 'text', text: '重构登录模块' })
     // 编排状态落盘 taskImages（真实 fileStorage，读 orchestrator.json）
@@ -402,7 +540,8 @@ describe('agent/request waterfall 按步切换模型', () => {
   it('executing 且当前步有映射 → 覆盖 provider/model，保留其余字段', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('executing', {
       stepIndex: 1,
       plan: {
@@ -417,13 +556,12 @@ describe('agent/request waterfall 按步切换模型', () => {
     await fireCreated(ctx, agent)
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
-    // 经 settings/updated 桥接喂入映射（命令已删除，桥接是唯一写路径）
-    await settingsListenerOf(ctx)!(
-      'pae-step-models',
-      { 'sess-1': { 1: { provider: 'p1', model: 'm1' } } },
-      {},
-      'user',
-    )
+    // 通道喂入映射（客户端写 volatile 字段 → 宿主派发到编排器）
+    feedStepModels(ctx, config, 'sess-1', { 1: { provider: 'p1', model: 'm1' } })
+    await vi.waitFor(async () => {
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'p1', model: 'm1' } })
+    })
     await expect(
       requestHandler!({}, async () => ({ provider: 's', model: 'm', maxTokens: 100 })),
     ).resolves.toEqual({ provider: 'p1', model: 'm1', maxTokens: 100 })
@@ -432,7 +570,8 @@ describe('agent/request waterfall 按步切换模型', () => {
   it('当前步无映射 → 原样透传', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('executing', {
       stepIndex: 1,
       plan: {
@@ -448,12 +587,11 @@ describe('agent/request waterfall 按步切换模型', () => {
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
     // 步骤 2 的映射不影响步骤 1 的请求（透传）
-    await settingsListenerOf(ctx)!(
-      'pae-step-models',
-      { 'sess-1': { 2: { provider: 'p2', model: 'm2' } } },
-      {},
-      'user',
-    )
+    feedStepModels(ctx, config, 'sess-1', { 2: { provider: 'p2', model: 'm2' } })
+    await vi.waitFor(async () => {
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 2: { provider: 'p2', model: 'm2' } })
+    })
     await expect(
       requestHandler!({}, async () => ({ provider: 's', model: 'm', maxTokens: 100 })),
     ).resolves.toEqual({ provider: 's', model: 'm', maxTokens: 100 })
@@ -462,7 +600,8 @@ describe('agent/request waterfall 按步切换模型', () => {
   it('映射无 effort → 剥离 seed 继承的 reasoningEffort（对齐宿主 installModelSelection）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('executing', {
       stepIndex: 1,
       plan: {
@@ -477,14 +616,12 @@ describe('agent/request waterfall 按步切换模型', () => {
     await fireCreated(ctx, agent)
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
-    // 经 settings/updated 桥接喂入映射（命令已删除，桥接是唯一写路径）
-    const listener = settingsListenerOf(ctx)!
-    await listener(
-      'pae-step-models',
-      { 'sess-1': { 1: { provider: 'p1', model: 'm1' } } },
-      {},
-      'user',
-    )
+    // 通道喂入映射（客户端写 volatile 字段 → 宿主派发到编排器）
+    feedStepModels(ctx, config, 'sess-1', { 1: { provider: 'p1', model: 'm1' } })
+    await vi.waitFor(async () => {
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'p1', model: 'm1' } })
+    })
     const returned = await requestHandler!({}, async () => ({
       provider: 's',
       model: 'm',
@@ -499,7 +636,8 @@ describe('agent/request waterfall 按步切换模型', () => {
   it('无映射 → 透传原样（含 seed 的 reasoningEffort）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('executing', {
       stepIndex: 1,
       plan: {
@@ -515,13 +653,11 @@ describe('agent/request waterfall 按步切换模型', () => {
     const requestHandler = requestHandlerOf(agent)
     expect(requestHandler).toBeDefined()
     // 步骤 2 的映射不影响步骤 1 的请求（透传）
-    const listener = settingsListenerOf(ctx)!
-    await listener(
-      'pae-step-models',
-      { 'sess-1': { 2: { provider: 'p2', model: 'm2' } } },
-      {},
-      'user',
-    )
+    feedStepModels(ctx, config, 'sess-1', { 2: { provider: 'p2', model: 'm2' } })
+    await vi.waitFor(async () => {
+      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+      expect(JSON.parse(raw).stepModels).toEqual({ 2: { provider: 'p2', model: 'm2' } })
+    })
     const returned = await requestHandler!({}, async () => ({
       provider: 's',
       model: 'm',
@@ -592,19 +728,19 @@ describe('todos 补写（新回合首个 agent/request）', () => {
   })
 })
 
-describe('settings/updated 桥接', () => {
-  it('本命名空间变更 → 解析校验后 applyStepModels（按 sessionId 定位编排器）', async () => {
+describe('volatile 通道派发（客户端静默写 → 编排器）', () => {
+  it('通道值变更 → 解析校验后 applyStepModels（按 sessionId 定位编排器）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('planning', {
       plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)!
-    expect(listener).toBeDefined()
-    listener!('pae-step-models', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
+    expect(volatileListenerOf(ctx)).toBeDefined()
+    feedStepModels(ctx, config, 'sess-1', { 1: { provider: 'a', model: 'm' } })
     await vi.waitFor(async () => {
       expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'a', model: 'm' })
       const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
@@ -612,27 +748,33 @@ describe('settings/updated 桥接', () => {
     })
   })
 
-  it('非本命名空间 → 不处理', async () => {
+  it('通道值未变化 → 不重复应用（同值去重，不白写盘）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('planning', {
       plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)!
-    expect(listener).toBeDefined()
-    listener!('other-ns', { 'sess-1': { 1: { provider: 'a', model: 'm' } } }, {}, 'user')
+    config.paeStepModels.set({ 'sess-1': { 1: { provider: 'a', model: 'm' } } })
+    volatileListenerOf(ctx)!()
+    await vi.waitFor(() => {
+      expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'a', model: 'm' })
+    })
+    ctx.llm.resolveCallConfig.mockClear()
+    // 再次通知但值未变 → 不重新应用
+    volatileListenerOf(ctx)!()
+    await new Promise((resolve) => setTimeout(resolve, 20))
     expect(ctx.llm.resolveCallConfig).not.toHaveBeenCalled()
-    const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
-    expect(JSON.parse(raw)).not.toHaveProperty('stepModels')
   })
 
   it('非法条目丢弃、合法条目生效（混合载荷不抛）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('planning', {
       plan: {
         planDir: join(cwd, '.pae', 'sess-1'),
@@ -644,14 +786,11 @@ describe('settings/updated 桥接', () => {
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)!
-    expect(listener).toBeDefined()
-    listener!(
-      'pae-step-models',
-      { 'sess-1': { 1: { provider: 42 }, 2: { provider: 'b', model: 'm2' } } },
-      {},
-      'user',
-    )
+    expect(volatileListenerOf(ctx)).toBeDefined()
+    config.paeStepModels.set({
+      'sess-1': { 1: { provider: 42 }, 2: { provider: 'b', model: 'm2' } },
+    } as unknown as StepModelsValue)
+    volatileListenerOf(ctx)!()
     await vi.waitFor(async () => {
       expect(ctx.llm.resolveCallConfig).toHaveBeenCalledWith({ provider: 'b', model: 'm2' })
       const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
@@ -659,28 +798,25 @@ describe('settings/updated 桥接', () => {
     })
   })
 
-  it('applyStepModels 抛错（目录只读落盘失败）→ 监听器返回 rejected promise（宿主容器可接住记 warn）', async () => {
+  it('applyStepModels 抛错（目录只读落盘失败）→ 记 warn，不抛出（无 unhandled rejection）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('planning', {
       plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)!
-    expect(listener).toBeDefined()
-    // 目录只读 → save 的 writeFile 抛 EACCES → applyStepModels 抛出 → IIFE 拒绝
+    // 目录只读 → save 的 writeFile 抛 EACCES → applyStepModels 抛出 → 内部接住记 warn
     await chmod(join(cwd, '.pae', 'sess-1'), 0o500)
     try {
-      await expect(
-        listener!(
-          'pae-step-models',
-          { 'sess-1': { 1: { provider: 'a', model: 'm' } } },
-          {},
-          'user',
-        ),
-      ).rejects.toThrow()
+      expect(() => {
+        feedStepModels(ctx, config, 'sess-1', { 1: { provider: 'a', model: 'm' } })
+      }).not.toThrow()
+      await vi.waitFor(() => {
+        expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('应用步骤模型失败'))
+      })
     } finally {
       await chmod(join(cwd, '.pae', 'sess-1'), 0o700)
     }
@@ -689,60 +825,79 @@ describe('settings/updated 桥接', () => {
   it('解析出步骤但 resolveCallConfig 全失败 → 跳过本次应用（既有选择保留，不清空）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    const config = channelConfig()
+    apply(ctx as never, config)
     await seedState('planning', {
       plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
       stepModels: { 1: { provider: 'p1', model: 'm1' } },
     })
     const agent = fakeAgent('planning')
     await fireCreated(ctx, agent)
-    const listener = settingsListenerOf(ctx)!
-    expect(listener).toBeDefined()
+    expect(volatileListenerOf(ctx)).toBeDefined()
     ctx.llm.resolveCallConfig.mockRejectedValue(new Error('unknown model'))
-    await listener!(
-      'pae-step-models',
-      { 'sess-1': { 1: { provider: 'a', model: 'm' } } },
-      {},
-      'user',
-    )
-    await vi.waitFor(async () => {
-      const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
-      expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'p1', model: 'm1' } })
+    feedStepModels(ctx, config, 'sess-1', { 1: { provider: 'a', model: 'm' } })
+    await vi.waitFor(() => {
+      expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('全部步骤模型不可用'))
     })
-    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('全部步骤模型不可用'))
+    const raw = await readFile(join(cwd, '.pae', 'sess-1', 'orchestrator.json'), 'utf8')
+    expect(JSON.parse(raw).stepModels).toEqual({ 1: { provider: 'p1', model: 'm1' } })
   })
 
-  it('settings.register 抛错（重复注册）→ 降级不崩、无桥接监听', async () => {
+  it('无编排器的会话键 / 未装配通道 → 静默跳过不抛', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    ctx.settings.register.mockImplementation(() => {
-      throw new Error('settings namespace "pae-step-models" is already registered')
-    })
+    const config = channelConfig()
+    apply(ctx as never, config)
+    expect(() => {
+      feedStepModels(ctx, config, 'ghost-sess', { 1: { provider: 'a', model: 'm' } })
+    }).not.toThrow()
+    // 程序化装配省略通道（可选字段）时也照常加载
+    const bare = fakeCtx()
     expect(() =>
-      apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
+      apply(bare as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' }),
     ).not.toThrow()
-    expect(ctx.listeners.map((l) => l.event)).not.toContain('settings/updated')
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('settings 命名空间注册失败'),
-    )
+    expect(() => volatileListenerOf(bare)!()).not.toThrow()
   })
 })
 
-describe('pae-ping 桥接（会话查看脉冲）', () => {
-  it('注册 pae-ping 命名空间（models 之后各自独立 try）并挂 settings/updated 桥接', async () => {
+describe('会话查看脉冲通道（paeSessionPings）', () => {
+  it('启动快照：装配时已有的脉冲视为已处理（不重放历史查看信号）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    const registered = (ctx.settings.register as Mock).mock.calls.map((call) => call[0])
-    expect(registered).toEqual([PAE_MODELS_NS, PAE_PING_NS])
-    expect(settingsListenerOf(ctx)).toBeDefined()
+    const config = channelConfig()
+    // 装配前已有脉冲（上一次进程写入的持久值）
+    config.paeSessionPings.set({ 'sess-1': { t: Date.now() - 1000 } })
+    const userQuestions = {
+      ask: vi.fn(async (): Promise<AskUserQuestionAnswer> => ({
+        answers: [{ id: 'pae-approve', selected: ['批准'], custom: '' }],
+      })),
+    }
+    const defaultGet = ctx.get.getMockImplementation()!
+    ctx.get.mockImplementation((key: string) =>
+      key === 'userQuestions' ? userQuestions : defaultGet(key),
+    )
+    apply(ctx as never, config)
+    await seedState('scheduled', {
+      scheduledAt: Date.now() + 60_000,
+      plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
+    })
+    await writeFile(join(cwd, '.pae', 'sess-1', 'a.md'), '# A\n内容', 'utf8')
+    const agent = fakeAgent('none')
+    await fireCreated(ctx, agent)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(userQuestions.ask).toHaveBeenCalledTimes(1) // revive 的回显卡
+    // 一次无关的 volatile 通知也不得把历史脉冲当成本次信号重弹
+    volatileListenerOf(ctx)!()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(userQuestions.ask).toHaveBeenCalledTimes(1)
   })
 
-  it('scheduled 等待期弹卡被 dismiss → pae-ping 桥接重弹回显卡（dismiss 后 ping 重弹链路）', async () => {
+  it('scheduled 等待期弹卡被 dismiss → 脉冲重弹回显卡（dismiss 后脉冲重弹链路）', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
+    const config = channelConfig()
     // 可记录式 userQuestions 假服务：ask#1（revive 弹卡）以拒绝模拟用户关闭/丢卡 →
-    // 编排器折叠为 dismissed（保持排期等待）；之后的 ask（ping 重弹）即刻批准（无载荷 = 保持）
+    // 编排器折叠为 dismissed（保持排期等待）；之后的 ask（脉冲重弹）即刻批准（无载荷 = 保持）
     const userQuestions = {
       ask: vi.fn(
         async (_options: {
@@ -755,13 +910,12 @@ describe('pae-ping 桥接（会话查看脉冲）', () => {
       ),
     }
     userQuestions.ask.mockRejectedValueOnce(new Error('card dismissed'))
-    // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.inject(['settings'])
-    // 注册命名空间，整体替换会令注册静默跳过、无桥接监听）
+    // 叠加式覆盖：保留 fakeCtx 默认服务（llm 等——整体替换会令相关降级路径失效）
     const defaultGet = ctx.get.getMockImplementation()!
     ctx.get.mockImplementation((key: string) =>
       key === 'userQuestions' ? userQuestions : defaultGet(key),
     )
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
+    apply(ctx as never, config)
     await seedState('scheduled', {
       scheduledAt: Date.now() + 60_000,
       plan: { planDir: join(cwd, '.pae', 'sess-1'), steps: [{ file: 'a.md', title: 'A' }] },
@@ -770,25 +924,24 @@ describe('pae-ping 桥接（会话查看脉冲）', () => {
     const agent = fakeAgent('none')
     await fireCreated(ctx, agent) // revive → 回显卡 ask#1（dismiss → 保持排期等待、不再弹卡）
     await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(1))
-    // 无卡悬空时 ping 才重弹：dismiss 后走 reviewScheduledAgain → 经 userQuestions 弹 ask#2
-    const listener = settingsListenerOf(ctx)!
-    await listener('pae-ping', { 'sess-1': { t: Date.now() } }, {}, 'user')
+    // 无卡悬空时脉冲才重弹：dismiss 后走 reviewScheduledAgain → 经 userQuestions 弹 ask#2
+    feedPing(ctx, config, 'sess-1', Date.now())
     await vi.waitFor(() => expect(userQuestions.ask).toHaveBeenCalledTimes(2))
     const second = userQuestions.ask.mock.calls[1]![0]!
     expect(second.questions[0]).toMatchObject({ intent: { kind: 'plan-review', approve: '批准' } })
     expect((second.questions[0] as { detail?: string }).detail).toContain('执行排期：')
   })
 
-  it('无对应编排器（sessionId 未注册）→ 静默跳过不抛', async () => {
+  it('无对应编排器（sessionId 未注册）/ 非法脉冲值 → 静默跳过不抛', async () => {
     const { apply } = await import('../src/index.ts')
     const ctx = fakeCtx()
-    apply(ctx as never, { onStepFailure: 'pause', maxAutoRecoveries: 2, planDir: '.pae' })
-    const listener = settingsListenerOf(ctx)!
-    // 从未 fireCreated：bySessionId 无该 session → 循环内 continue，监听器正常 resolve
-    await expect(
-      listener('pae-ping', { 'ghost-sess': { t: Date.now() } }, {}, 'user'),
-    ).resolves.toBeUndefined()
-    await expect(listener('pae-ping', undefined, {}, 'user')).resolves.toBeUndefined()
+    const config = channelConfig()
+    apply(ctx as never, config)
+    // 从未 fireCreated：bySessionId 无该 session → 循环内 continue
+    expect(() => feedPing(ctx, config, 'ghost-sess', Date.now())).not.toThrow()
+    // 非法脉冲（t 非有限数）→ parsePaePing 拒绝
+    config.paeSessionPings.set({ 'sess-1': { t: Number.NaN } })
+    expect(() => volatileListenerOf(ctx)!()).not.toThrow()
   })
 })
 
@@ -823,8 +976,7 @@ describe('定时排期接线', () => {
         }),
       ),
     }
-    // 叠加式覆盖：保留 fakeCtx 默认服务（settings/llm 等——apply 内经 ctx.inject(['settings'])
-    // 注册命名空间，整体替换会令注册静默跳过、无桥接监听）
+    // 叠加式覆盖：保留 fakeCtx 默认服务（llm 等——整体替换会令降级路径失效）
     const defaultGet = ctx.get.getMockImplementation()!
     ctx.get.mockImplementation((key: string) =>
       key === 'userQuestions' ? userQuestions : defaultGet(key),

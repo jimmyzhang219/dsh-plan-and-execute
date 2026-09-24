@@ -10,7 +10,6 @@
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
@@ -49,6 +48,7 @@ import {
   type PaeStepReportPayload,
   type PlanStep,
   type StepReportStatus,
+  type TaskAttachment,
 } from './state.ts'
 
 /** 当前 surface 折叠视图（模型可见消息序列的事件 seq 列表）。 */
@@ -65,6 +65,11 @@ export interface DriveSession {
   readonly events: readonly SessionEvent[]
   /** 当前 surface 折叠视图（模型可见消息序列）。 */
   readonly surface: DriveSurface
+  /**
+   * 模型投影的首条消息是否为系统提示（宿主 0.1.7 起系统提示占 surface node 0，
+   * 只允许恰好覆盖该节点的 system/message 改写它）。整面 replace 据此绕开该节点。
+   */
+  hasSystemHead(): boolean
   /** 写 `todo/write` 整表快照（宿主内置事件）。 */
   writeTodos(todos: readonly TodoItem[]): void
   /**
@@ -147,8 +152,8 @@ interface RuntimeState {
   phase: PaePhase | 'none'
   /** 任务文本（用户输入）。 */
   task?: string
-  /** 启动命令携带的任务参考图（耐久 image 块；空/缺省 = 纯文字任务）。 */
-  taskImages?: readonly ImageBlock[]
+  /** 启动命令携带的任务附件块（耐久 image/file 块；空/缺省 = 纯文字任务）。 */
+  taskImages?: readonly TaskAttachment[]
   /** 计划目录。 */
   planDir?: string
   /** 当前步骤号（1-based）。 */
@@ -270,13 +275,14 @@ export class Orchestrator {
     }
   }
 
-  /** 命令入口：清空旧编排目录、进入规划阶段并注入 kickoff；带图时参考图随任务消息锚定。 */
-  async begin(task: string, images?: readonly ImageBlock[]): Promise<void> {
+  /** 命令入口：清空旧编排目录、进入规划阶段并注入 kickoff；带附件时附件块随任务消息锚定。 */
+  async begin(task: string, attachments?: readonly TaskAttachment[]): Promise<void> {
     await resetPlanDir(this.deps.planDir)
     this.deps.hooks?.onActivate?.()
     this.state.phase = 'planning'
     this.state.task = task
-    this.state.taskImages = images !== undefined && images.length > 0 ? [...images] : undefined
+    this.state.taskImages =
+      attachments !== undefined && attachments.length > 0 ? [...attachments] : undefined
     this.state.planDir = this.deps.planDir
     this.state.stepIndex = undefined
     this.state.pausedReason = undefined
@@ -293,8 +299,8 @@ export class Orchestrator {
     await this.save()
     // 新编排以整面 replace 锚定任务原文（遮蔽旧会话历史对模型可见的部分；
     // 事件日志与 UI 轨迹保留，同会话二次运行自动隔离），再注入 kickoff 指令
-    // （kind='plugin'，轨迹「上下文」行）。锚定与 steer 须同一同步 tick 相邻执行。
-    this.replaceAll(userTaskMessage(task, images))
+    // （插件自有 source.kind，轨迹「上下文」行）。锚定与 steer 须同一同步 tick 相邻执行。
+    this.replaceAll(userTaskMessage(task, attachments))
     this.deps.agent.steer(kickoffInstruction(task, this.deps.planDir))
     this.armApproval()
   }
@@ -517,7 +523,12 @@ export class Orchestrator {
     await this.reportStep(folded.stepIndex, status, artifacts, summary, exitCode)
   }
 
-  /** 注入指令后等待本步结局。 */
+  /**
+   * 注入指令后等待本步结局。
+   * 靠 `session.events` 的水位线切片读取本步新追加的 `turn/end`——该视图必须是
+   * 实时快照（适配层用 getter 实现），否则本步的回合边界不可见、turn 原因恒为
+   * undefined，分类会从 failed/aborted 退化为 missing-report。
+   */
   private async settle(stepIndex: number): Promise<StepOutcome> {
     const eventMark = this.session.events.length
     const reportWatermark = this.reportWatermark
@@ -533,14 +544,34 @@ export class Orchestrator {
     return classifyOutcome(turnEndKind, freshReport)
   }
 
-  /** 整面 replace：以一条上下文消息遮蔽当前 surface 全部节点（surface 为空时退化为仅注入）。 */
+  /**
+   * 整面遮蔽区间：surface 头部的系统提示节点必须留在区间之外。
+   * 宿主 0.1.7 起系统提示就是 surface node 0，且「覆盖 node 0 的 replace 只能是恰好
+   * 覆盖该节点的 system/message」，整面遮蔽会把系统提示一起遮掉并抛
+   * `node 0 holds the system prompt ...`；后续 system 节点不受保护。
+   * @param nodes - 当前 surface 节点 seq（模型可见顺序）。
+   * @returns 遮蔽区间（start/end 节点 seq + 被遮蔽节点清单）；无可遮蔽节点时 undefined。
+   */
+  private shadowRange(
+    nodes: readonly number[],
+  ): { start: number; end: number; sourceEventSeqs: number[] } | undefined {
+    const from = nodes.length > 0 && this.session.hasSystemHead() ? 1 : 0
+    if (from >= nodes.length) return undefined
+    return {
+      start: nodes[from]!,
+      end: nodes[nodes.length - 1]!,
+      sourceEventSeqs: nodes.slice(from),
+    }
+  }
+
+  /** 整面 replace：以一条上下文消息遮蔽当前 surface 全部可遮蔽节点（无节点时退化为仅注入）。 */
   private replaceAll(message: UserMessage): void {
-    const nodes = [...this.session.surface.nodes]
-    if (nodes.length === 0) {
+    const range = this.shadowRange(this.session.surface.nodes)
+    if (range === undefined) {
       this.deps.agent.steer(message)
       return
     }
-    this.session.replaceSurface(message, nodes[0]!, nodes[nodes.length - 1]!, nodes)
+    this.session.replaceSurface(message, range.start, range.end, range.sourceEventSeqs)
   }
 
   /**
@@ -549,15 +580,16 @@ export class Orchestrator {
    * 仅修改 surface（模型投影），事件日志与 UI 轨迹保留。
    */
   private ensureStepAnchor(i: number, plan: PaePlanPayload): void {
-    const nodes = [...this.session.surface.nodes]
+    const nodes = this.session.surface.nodes
     if (nodes.length === 0) return
     const anchoredSeq = this.state.anchorSeqs.get(i)
     if (anchoredSeq !== undefined && nodes.includes(anchoredSeq)) return
+    const range = this.shadowRange(nodes)!
     const seq = this.session.replaceSurface(
       this.stepContextMessage(i, plan),
-      nodes[0]!,
-      nodes[nodes.length - 1]!,
-      nodes,
+      range.start,
+      range.end,
+      range.sourceEventSeqs,
     )
     this.state.anchorSeqs.set(i, seq)
   }
@@ -738,7 +770,7 @@ export class Orchestrator {
     return 'dismissed'
   }
 
-  /** 回到规划阶段：有图任务重锚任务图文消息、无图保持 replanContext 锚定，再注入重规划指令、重新挂起审批。 */
+  /** 回到规划阶段：带附件任务重锚任务消息、无附件保持 replanContext 锚定，再注入重规划指令、重新挂起审批。 */
   private async enterReplan(plan: PaePlanPayload): Promise<void> {
     this.state.phase = 'planning'
     this.state.plan = undefined
@@ -746,11 +778,11 @@ export class Orchestrator {
     this.state.stepModels.clear()
     await this.save()
     const task = this.state.task
-    const images = this.state.taskImages
-    if (task !== undefined && images !== undefined && images.length > 0) {
-      // 图文分支：整面重锚任务图文（模型继续参考原图），反馈+原计划清单内嵌在
-      // 合并指令中（replanDetailedInstruction），与无图分支保持同 tick 相邻语义
-      this.replaceAll(userTaskMessage(task, images))
+    const attachments = this.state.taskImages
+    if (task !== undefined && attachments !== undefined && attachments.length > 0) {
+      // 带附件分支：整面重锚任务消息（模型继续参考原附件），反馈+原计划清单内嵌在
+      // 合并指令中（replanDetailedInstruction），与无附件分支保持同 tick 相邻语义
+      this.replaceAll(userTaskMessage(task, attachments))
       this.deps.agent.steer(replanDetailedInstruction(this.lastFeedback, plan))
     } else {
       this.replaceAll(replanContextMessage(this.lastFeedback, plan))
@@ -1030,12 +1062,12 @@ export class Orchestrator {
       if (answer === 'dismissed') return
       const label = answer.answers.find((entry) => entry.id === 'pae-resume')?.selected[0]
       if (label === '继续规划') {
-        // 图文任务条件重锚：仅 taskImages 非空时整面重锚任务图文（补偿 compaction/
-        // 重启丢图）；纯文字任务维持现状（不遮蔽重启前用户留在 surface 的补充消息）
+        // 带附件任务条件重锚：仅 taskImages 非空时整面重锚任务消息（补偿 compaction/
+        // 重启丢附件）；纯文字任务维持现状（不遮蔽重启前用户留在 surface 的补充消息）
         const task = this.state.task
-        const images = this.state.taskImages
-        if (task !== undefined && images !== undefined && images.length > 0) {
-          this.replaceAll(userTaskMessage(task, images))
+        const attachments = this.state.taskImages
+        if (task !== undefined && attachments !== undefined && attachments.length > 0) {
+          this.replaceAll(userTaskMessage(task, attachments))
         }
         this.deps.agent.steer(resumePlanningInstruction())
         this.armApproval()

@@ -3,7 +3,6 @@
  * @module dsh-plan-and-execute/client/review-card
  */
 import type { CardArgs } from './plan-card.ts'
-import { serializeStepModels } from './plan-card.ts'
 
 /** 结构判定面：plan-review 待审批（避免 instanceof 值导入非种子包）。 */
 export interface PlanReviewPendingLike {
@@ -128,14 +127,6 @@ export function parsePlanDetail(detail: string): CardArgs | undefined {
     })
   }
   return { planDir, steps, ...(scheduledAt === undefined ? {} : { scheduledAt }) }
-}
-
-/** 下拉选择 → settings.update 载荷（sessionId 键 + 完整修改后映射）。 */
-export function buildSettingsPatch(
-  sessionId: string,
-  selection: Readonly<Record<number, string>>,
-): Record<string, Record<number, { provider: string; model: string }>> {
-  return { [sessionId]: serializeStepModels(selection) }
 }
 
 /**

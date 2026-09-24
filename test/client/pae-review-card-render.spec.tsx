@@ -7,7 +7,7 @@ import {
   type PaeReviewCardProps,
 } from '../../src/client/PaeReviewCard.tsx'
 import { nextFullHour } from '../../src/client/review-card.ts'
-import { PAE_MODELS_NS } from '../../src/state.ts'
+import type { ChannelsWriter } from '../../src/client/channels.ts'
 import { zh } from '../../src/client/locale.ts'
 
 // vitest 未开 globals：显式 cleanup 避免跨用例 DOM 累积（与 plan-card-render.spec.tsx 一致）。
@@ -58,7 +58,10 @@ const base: PaeReviewCardProps = {
   ],
   current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   openPath: vi.fn(),
-  settings: { update: vi.fn(async () => undefined) },
+  channels: {
+    writeStepModels: vi.fn(async () => undefined),
+    writePing: vi.fn(async () => undefined),
+  },
   t: (key: string) => key,
 }
 
@@ -73,17 +76,15 @@ describe('PaeReviewCard', () => {
     expect((selects[1] as HTMLSelectElement).value).toBe('deepseek-official|deepseek-v4-flash')
   })
 
-  it('下拉 onChange → 静默 settings.update（完整映射，无按钮）', async () => {
+  it('下拉 onChange → 静默通道写（完整映射，无按钮）', async () => {
     render(<PaeReviewCard {...base} />)
     fireEvent.change(screen.getAllByRole('combobox')[0]!, {
       target: { value: 'deepseek-official|deepseek-v4-pro' },
     })
     await waitFor(() => {
-      expect(base.settings.update).toHaveBeenCalledWith(
-        PAE_MODELS_NS,
-        { 'sess-1': { 1: { provider: 'deepseek-official', model: 'deepseek-v4-pro' } } },
-        undefined,
-      )
+      expect(base.channels.writeStepModels).toHaveBeenCalledWith('sess-1', {
+        1: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+      })
     })
   })
 
@@ -123,13 +124,14 @@ describe('PaeReviewCard', () => {
     expect(base.openPath).toHaveBeenCalledWith('.pae/sess-1/b.md')
   })
 
-  it('settings.update 拒绝 → 行内错误显示，不崩溃', async () => {
-    const failing = {
-      update: vi.fn(async () => {
+  it('通道写入拒绝 → 行内错误显示，不崩溃', async () => {
+    const failing: ChannelsWriter = {
+      writeStepModels: vi.fn(async () => {
         throw new Error('denied')
       }),
+      writePing: vi.fn(async () => undefined),
     }
-    render(<PaeReviewCard {...base} settings={failing} />)
+    render(<PaeReviewCard {...base} channels={failing} />)
     fireEvent.change(screen.getAllByRole('combobox')[0]!, {
       target: { value: 'deepseek-official|deepseek-v4-pro' },
     })
@@ -166,13 +168,15 @@ describe('执行时间控件', () => {
   /** 本地日期 YYYY-MM-DD（日历 td[data-day] 查询用）。 */
   const isoDay = (d: Date): string =>
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-  /** 渲染卡片（可选回显 scheduledAt）并点 chip 展开浮层；返回独立 settings.update spy。 */
-  const openPanel = (at?: number, update = vi.fn(async () => undefined)) => {
-    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+  /** 渲染卡片（可选回显 scheduledAt）并点 chip 展开浮层；返回独立通道写 spy。 */
+  const openPanel = (at?: number, writeStepModels = vi.fn(async () => undefined)) => {
+    render(
+      <PaeReviewCard {...scheduledArgs(at)} channels={{ ...base.channels, writeStepModels }} />,
+    )
     fireEvent.click(
       screen.getByRole('button', { name: at === undefined ? /^立即执行$/ : previewOf(at) }),
     )
-    return update
+    return writeStepModels
   }
   /** 点击日历中指定本地日的单元格按钮（td[data-day] 定位；该日须在当前展示月内）。 */
   const clickDay = (d: Date): void => {
@@ -313,7 +317,12 @@ describe('执行时间控件', () => {
     when.setSeconds(0, 0)
     const at = when.getTime()
     const update = vi.fn(async () => undefined)
-    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+    render(
+      <PaeReviewCard
+        {...scheduledArgs(at)}
+        channels={{ ...base.channels, writeStepModels: update }}
+      />,
+    )
     expect(screen.getByRole('button', { name: previewOf(at) })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: previewOf(at) })) // 点 chip 展开
     const panel = pickerEl()
@@ -344,10 +353,15 @@ describe('执行时间控件', () => {
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('回显卡 chip 旁 × → 仅本地清 when=null（无 settings 写），chip 回立即执行', () => {
+  it('回显卡 chip 旁 × → 仅本地清 when=null（无通道写），chip 回立即执行', () => {
     const at = Date.now() + 7 * 86_400_000
     const update = vi.fn(async () => undefined)
-    render(<PaeReviewCard {...scheduledArgs(at)} settings={{ update }} />)
+    render(
+      <PaeReviewCard
+        {...scheduledArgs(at)}
+        channels={{ ...base.channels, writeStepModels: update }}
+      />,
+    )
     // × 的可访问名为 scheduleClear
     fireEvent.click(screen.getByRole('button', { name: /清除排期/ }))
     expect(screen.getByRole('button', { name: /^立即执行$/ })).toBeTruthy()
@@ -490,15 +504,10 @@ describe('PaeReviewCardView', () => {
         }),
       ),
     },
-    settingsRemote: {
-      // 宿主 update 返回 RemoteResult<SettingsNamespaceView>（ok: true 判别联合，视图不消费结果值；
-      // SettingsNamespaceView 必填字段多（ns/schema/value/applies/secrets/revision），mock 用
-      // as never 占位，避免为未使用的形状追完整类型）。
-      update: vi.fn(async (): Promise<{ ok: true; value: never }> => ({
-        ok: true,
-        value: {} as never,
-      })),
-    },
+    channels: {
+      writeStepModels: vi.fn(async () => undefined),
+      writePing: vi.fn(async () => undefined),
+    } satisfies ChannelsWriter,
     connection: { isLoopback: true },
   }
 
@@ -515,7 +524,7 @@ describe('PaeReviewCardView', () => {
     expect(screen.getByRole('button', { name: 'openStep 2. 计算 2+2' })).toBeTruthy()
   })
 
-  it('sessionId undefined 时回退 pending.sessionId（settings 写键正确，不空白）', async () => {
+  it('sessionId undefined 时回退 pending.sessionId（通道写键正确，不空白）', async () => {
     render(
       <PaeReviewCardView
         sessionId={undefined}
@@ -528,11 +537,9 @@ describe('PaeReviewCardView', () => {
       fireEvent.change(screen.getAllByRole('combobox')[0]!, {
         target: { value: 'deepseek-official|deepseek-v4-flash' },
       })
-      expect(viewInject.settingsRemote.update).toHaveBeenCalledWith(
-        PAE_MODELS_NS,
-        { 'sess-pending': { 1: { provider: 'deepseek-official', model: 'deepseek-v4-flash' } } },
-        undefined,
-      )
+      expect(viewInject.channels.writeStepModels).toHaveBeenCalledWith('sess-pending', {
+        1: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+      })
     })
   })
 

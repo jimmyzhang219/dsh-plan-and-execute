@@ -9,6 +9,7 @@ import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/ds
 import { vi } from 'vitest'
 import type { DriveAgent, DriveSession, DriveSurface, Orchestrator } from '../src/orchestrator.ts'
 import type { PersistedOrchestratorState, PersistedStorage } from '../src/persist.ts'
+import { PAE_SOURCE_KIND } from '../src/state.ts'
 
 export const tempDirs: string[] = []
 
@@ -17,8 +18,7 @@ export function fakeUserMessage(text: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
     source: {
-      kind: 'plugin',
-      plugin: 'dsh-plan-and-execute',
+      kind: PAE_SOURCE_KIND,
       form: 'instructions',
       summary: text.slice(0, 40),
     },
@@ -49,6 +49,8 @@ export class FakeSession implements DriveSession {
   todosWrites: TodoItem[][] = []
   /** surface 节点（模型可见消息的事件 seq，模拟宿主折叠视图）。 */
   readonly nodes: number[] = []
+  /** 模型投影首条消息是否为系统提示（宿主 0.1.7 起的 surface node 0 保护）。 */
+  systemHead = false
   /** replace 提交计数（宿主 replaceGeneration 语义）。 */
   replaceGeneration = 0
   /** replaceSurface 调用记录（测试断言锚定次数/内容）。 */
@@ -76,6 +78,10 @@ export class FakeSession implements DriveSession {
   /** 折叠视图（DriveSurface 形状）。 */
   get surface(): DriveSurface {
     return { nodes: this.nodes, replaceGeneration: this.replaceGeneration }
+  }
+
+  hasSystemHead(): boolean {
+    return this.systemHead
   }
 
   writeTodos(todos: readonly TodoItem[]): void {

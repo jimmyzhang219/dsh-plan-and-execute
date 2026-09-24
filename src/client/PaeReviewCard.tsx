@@ -1,5 +1,5 @@
 /**
- * plan-review 审批卡替换：步骤打开文件/目录 + 每步模型下拉（静默写 settings）+ 决策按钮。
+ * plan-review 审批卡替换：步骤打开文件/目录 + 每步模型下拉（静默写通道）+ 决策按钮。
  * 注册于 conversation.composer（priority -1），仅接管 plan-review 待审批。
  * 数据获取与异步（modelCatalog/canOpenWorkspacePath）在 PaeReviewCardView 薄包装里完成，
  * PaeReviewCard 只收纯数据 props（便于 jsdom 单测）。
@@ -28,10 +28,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { DayPicker } from 'react-day-picker'
 import type { CaptionLabelProps, WeekdayProps } from 'react-day-picker'
 import type { CardArgs, ModelOption } from './plan-card.ts'
-import { flattenCatalog, optionKey } from './plan-card.ts'
-import { PAE_MODELS_NS } from '../state.ts'
+import { flattenCatalog, optionKey, serializeStepModels } from './plan-card.ts'
+import type { ChannelsWriter } from './channels.ts'
 import {
-  buildSettingsPatch,
   encodeApprovalSchedule,
   isPlanReviewPending,
   nextFullHour,
@@ -100,13 +99,6 @@ interface PickerAnchor {
   readonly width: number
 }
 
-/**
- * JSON 值（settings 通道载荷类型）。宿主侧定义于 dsh-util-values，
- * 该包运行时由 dsh 进程提供、不随本插件安装，故在此本地复刻，
- * 语义与宿主一致（见 review-card.ts 的 buildSettingsPatch 载荷）。
- */
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
-
 /** epoch ms → 本地 'YYYY-MM-DD HH:mm'（chip/状态行显示；与服务端 formatScheduleAt 同格式）。 */
 function formatLocal(at: number): string {
   const d = new Date(at)
@@ -147,14 +139,8 @@ export interface PaeReviewCardProps {
   readonly current: { readonly provider: string; readonly model: string }
   /** 打开路径回调（目录/步骤文件，经 session.openWorkspacePath）。 */
   readonly openPath: (path: string) => void
-  /** 静默写 settings 通道（模型选择持久化；排期已不走此通道）。 */
-  readonly settings: {
-    readonly update: (
-      ns: string,
-      patch: Record<string, JsonValue>,
-      rev: number | undefined,
-    ) => Promise<unknown>
-  }
+  /** 静默通道写入器（模型选择持久化；排期已不走此通道）。 */
+  readonly channels: ChannelsWriter
   /** 文案翻译函数（locale 注入；键见 locale.ts）。 */
   readonly t: (key: string) => string
 }
@@ -169,7 +155,7 @@ export function PaeReviewCard({
   options,
   current,
   openPath,
-  settings,
+  channels,
   t,
 }: PaeReviewCardProps): ReactElement {
   const review = questionView(pending.questions)
@@ -240,7 +226,7 @@ export function PaeReviewCard({
     if (label === '继续修改') return t('keep')
     return label
   }
-  /** 模型下拉变更：本地 selection 更新 + settings 静默写（无 sessionId 时仅本地生效）。 */
+  /** 模型下拉变更：本地 selection 更新 + 通道静默写（无 sessionId 时仅本地生效）。 */
   const onModelChange = (step: number, value: string): void => {
     const next = { ...selection, [step]: value }
     setSelection(next)
@@ -250,8 +236,8 @@ export function PaeReviewCard({
       console.warn('[dsh-plan-and-execute] 审批卡缺少 sessionId，跳过模型选择保存')
       return
     }
-    void settings
-      .update(PAE_MODELS_NS, buildSettingsPatch(sessionId, next), undefined)
+    void channels
+      .writeStepModels(sessionId, serializeStepModels(next))
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)))
   }
 
@@ -682,13 +668,10 @@ type ReviewSessionRemoteLike = Pick<
   'modelCatalog' | 'canOpenWorkspacePath' | 'openWorkspacePath'
 >
 
-/** settings 远端面：静默写模型选择（Pick 即真实签名）。 */
-type ReviewSettingsRemoteLike = Pick<ClientRemote['settings'], 'update'>
-
 /** 审批卡注入面（注册入口 inject 工厂返回）。 */
 export interface PaeReviewCardInjected {
   readonly sessionRemote: ReviewSessionRemoteLike
-  readonly settingsRemote: ReviewSettingsRemoteLike
+  readonly channels: ChannelsWriter
   readonly connection: { readonly isLoopback: boolean }
 }
 
@@ -711,7 +694,7 @@ export function PaeReviewCardView({
   pendingInteraction,
   t,
   sessionRemote,
-  settingsRemote,
+  channels,
   connection,
 }: PaeReviewCardViewProps): ReactElement | null {
   const [catalog, setCatalog] = useState<ModelCatalog | undefined>(undefined)
@@ -735,7 +718,7 @@ export function PaeReviewCardView({
   }, [sessionRemote])
 
   // owner props 的 pendingInteraction 与 selector 的 matched 同值；结构判定不过则不接管。
-  // （会话打开 pae-ping 已移至注册入口 select：视图仅在结构命中时挂载，刷新无 pending
+  // （会话查看脉冲已移至注册入口 select：视图仅在结构命中时挂载，刷新无 pending
   // 时不挂载、effect 永不执行——select 每次链求值都跑，才是无死角的发送点。）
   if (!isPlanReviewPending(pendingInteraction)) return null
   const pending = pendingInteraction
@@ -753,7 +736,7 @@ export function PaeReviewCardView({
       options={catalog === undefined ? [] : flattenCatalog(catalog)}
       current={catalog?.default ?? { provider: '', model: '' }}
       openPath={(path) => sessionRemote.openWorkspacePath({ path })}
-      settings={{ update: settingsRemote.update }}
+      channels={channels}
       t={t as (key: string) => string}
     />
   )

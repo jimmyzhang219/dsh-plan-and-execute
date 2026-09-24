@@ -16,6 +16,7 @@ import {
   userTaskMessage,
   PLANNING_SECTION_BODY,
 } from '../src/prompts.ts'
+import { PAE_SOURCE_KIND } from '../src/state.ts'
 import { fakeImageBlock } from './helpers.ts'
 
 describe('section 正文', () => {
@@ -88,7 +89,7 @@ describe('注入消息', () => {
     const plain = userTaskMessage('重构登录模块')
     expect(plain.content).toEqual([{ type: 'text', text: '重构登录模块' }])
   })
-  it('replanDetailedInstruction 含用户反馈、原计划清单与指令语，source 为 plugin instruction', () => {
+  it('replanDetailedInstruction 含用户反馈、原计划清单与指令语，source 为插件自有 kind instruction', () => {
     const message = replanDetailedInstruction('粒度太粗', {
       planDir: '/p',
       steps: [
@@ -102,12 +103,11 @@ describe('注入消息', () => {
     expect(text).toContain('1. A（step-01-a.md）')
     expect(text).toContain('重新调用 submit_plan 提交审批')
     expect(message.source).toMatchObject({
-      kind: 'plugin',
-      plugin: 'dsh-plan-and-execute',
+      kind: PAE_SOURCE_KIND,
       form: 'instructions',
     })
   })
-  it('kickoff 不含任务原文（任务在锚定的 userTaskMessage 中），含 planDir，source 标记为 plugin instruction', () => {
+  it('kickoff 不含任务原文（任务在锚定的 userTaskMessage 中），含 planDir，source 标记为插件自有 kind instruction', () => {
     const message = kickoffInstruction('重构登录模块', '/p')
     expect(message.role).toBe('user')
     expect(message.content[0]).toMatchObject({ type: 'text' })
@@ -115,8 +115,7 @@ describe('注入消息', () => {
     expect(text).not.toContain('重构登录模块')
     expect(text).toContain('/p')
     expect(message.source).toMatchObject({
-      kind: 'plugin',
-      plugin: 'dsh-plan-and-execute',
+      kind: PAE_SOURCE_KIND,
       form: 'instructions',
     })
   })
@@ -143,7 +142,7 @@ describe('注入消息', () => {
       replanInstruction(3),
       resumePlanningInstruction(),
     ]) {
-      expect(m.source).toMatchObject({ kind: 'plugin', form: 'instructions' })
+      expect(m.source).toMatchObject({ kind: PAE_SOURCE_KIND, form: 'instructions' })
       expect((m.content[0] as { text: string }).text.length).toBeGreaterThan(0)
     }
   })

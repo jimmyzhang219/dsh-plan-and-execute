@@ -33,8 +33,9 @@ describe('buildTodoPayload', () => {
 describe('isPlanModeActive', () => {
   it('读宿主 plan/mode 事件，last-wins', () => {
     const events = [
-      { seq: 1, type: 'plan/mode', data: { active: true } } as SessionEvent,
-      { seq: 2, type: 'plan/mode', data: { active: false } } as SessionEvent,
+      // plan/mode 不在本工程编译单元的 SessionEventMap（宿主 plan-mode 拥有），双断言放宽
+      { seq: 1, time: 0, type: 'plan/mode', data: { active: true } } as unknown as SessionEvent,
+      { seq: 2, time: 0, type: 'plan/mode', data: { active: false } } as unknown as SessionEvent,
     ]
     expect(isPlanModeActive(events)).toBe(false)
     expect(isPlanModeActive([events[0]!])).toBe(true)

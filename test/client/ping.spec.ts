@@ -6,7 +6,7 @@ afterEach(() => {
   resetPingCache()
 })
 
-describe('allowSessionPing（pae-ping 会话打开信号限频）', () => {
+describe('allowSessionPing（会话查看脉冲限频）', () => {
   it('空串会话标识 → 不放行', () => {
     expect(allowSessionPing('', 1_700_000_000_000)).toBe(false)
   })

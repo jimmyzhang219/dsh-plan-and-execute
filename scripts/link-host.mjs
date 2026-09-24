@@ -15,6 +15,9 @@ const dshRoot = resolve(
 
 const HOST_PACKAGES = {
   '@deepseek-ai/cordis': 'vendor/cordis',
+  // loader/volatile-update 事件（volatile 配置值就地提交后派发给所属 fiber）的
+  // Events 合并声明由 loader 包拥有；宿主运行时由 dsh 提供（仅类型引用）。
+  '@deepseek-ai/cordis-plugin-loader': 'vendor/loader',
   '@deepseek-ai/schemastery': 'vendor/schemastery',
   '@deepseek-ai/dsh-agent': 'packages/core/agent',
   '@deepseek-ai/dsh-commands': 'packages/interaction/commands',

@@ -1,15 +1,15 @@
 /**
- * 会话查看脉冲（pae-ping）限频工具。
+ * 会话查看脉冲限频工具。
  *
- * client half 靠 pae-ping 时间戳脉冲告知宿主「会话正被查看」，宿主 settings 桥接
- * 据此在 scheduled 等待期重弹回显卡。脉冲发送点位于 conversation.composer 注册的
+ * client half 靠脉冲（paeSessionPings 通道字段里的时间戳）告知宿主「会话正被查看」，
+ * 宿主据此在 scheduled 等待期重弹回显卡。脉冲发送点位于 conversation.composer 注册的
  * select 内（每次链求值都执行——含无 pending 返回 null 的刷新/重开场景），本模块
  * 只负责「同一会话在窗口内至多放行一次」的限频判定：纯内存态、不依赖任何 DOM 或
  * 宿主运行时，页面生命周期内生效（刷新即空——恰好让刷新后的首次链求值重发脉冲）。
  * @module dsh-plan-and-execute/client/ping
  */
 
-/** pae-ping 限频窗口（同一会话两次打开信号的最小间隔，毫秒）。 */
+/** 脉冲限频窗口（同一会话两次打开信号的最小间隔，毫秒）。 */
 export const PING_INTERVAL_MS = 10_000
 
 /** 最近一次放行会话 → 放行时刻（module 级去重限频；页面生命周期内存，刷新即空）。 */

@@ -4,7 +4,7 @@
  * 正式安装：`dsh plugin --profile <name> add <本工程目录>`（读 dsh.bundle.patch）。
  * @module dsh-plan-and-execute
  */
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -18,8 +18,9 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/dsh-session-title'
-// Type-only：ctx.settings 服务与 settings/updated 事件的 Context 合并。
-import type {} from '@deepseek-ai/dsh-settings'
+// Type-only：loader/volatile-update 事件（volatile 值就地提交后派发给所属 fiber）的
+// Events 合并声明由 loader 包拥有。
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 // Type-only：todo/write 事件的 SessionEventMap 合并声明由 dsh-tool-todo 拥有。
 import type {} from '@deepseek-ai/dsh-tool-todo'
 import { decideScheduledFire, voidColdArchivedSession } from './archive-guard.ts'
@@ -27,15 +28,13 @@ import { Orchestrator, type DriveAgent, type DriveSession } from './orchestrator
 import { fileStorage } from './persist.ts'
 import { ScheduleRegistry } from './schedule.ts'
 import {
-  PAE_MODELS_NS,
-  PAE_MODELS_SCHEMA,
   parsePaeModels,
-  PAE_PING_NS,
-  PAE_PING_SCHEMA,
+  PAE_PINGS_SCHEMA,
+  PAE_STEP_MODELS_SCHEMA,
   parsePaePing,
 } from './settings.ts'
 import { EXECUTING_SECTION_BODY, PLANNING_SECTION_BODY } from './prompts.ts'
-import { isPlanModeActive } from './state.ts'
+import { isPlanModeActive, type PaeStepModel } from './state.ts'
 import { createReportStepTool, createSubmitPlanTool } from './tools.ts'
 
 /** 插件名（dsh 插件注册名；斜杠命令见下方命令注册）。 */
@@ -43,7 +42,7 @@ export const name = 'dsh-plan-and-execute'
 /** 必需服务注入：工具注册表与 system-prompt 段落表。 */
 export const inject = ['tools', 'systemPrompt']
 
-/** 插件配置：失败策略、自愈上限、计划目录根。 */
+/** 插件配置：失败策略、自愈上限、计划目录根、客户端静默通道。 */
 export interface Config {
   /** 步骤级失败策略：默认暂停问人。 */
   onStepFailure: 'pause' | 'auto-recover'
@@ -51,24 +50,52 @@ export interface Config {
   maxAutoRecoveries: number
   /** 计划根目录（相对会话 cwd）；实际目录 = <planDir>/<sessionId>。 */
   planDir: string
+  /**
+   * 每步模型选择通道（volatile 字段名见 state.ts PAE_STEP_MODELS_FIELD）：sessionId → 步骤号 → 模型。
+   * schema 带默认值，宿主装配时恒存在；声明为可选以便程序化装配/测试省略该通道（省略=通道关闭）。
+   */
+  paeStepModels?: Volatile<Record<string, Record<string, PaeStepModel>>>
+  /**
+   * 会话查看脉冲通道（volatile 字段名见 state.ts PAE_PINGS_FIELD）：sessionId → {t: epoch ms}。
+   * 可选性同 paeStepModels。
+   */
+  paeSessionPings?: Volatile<Record<string, { t: number }>>
 }
 
-/** 配置 schema（dsh 装配层据此读取配置并生成表单）。 */
-export const Config: Schema<Config> = Schema.object({
+/**
+ * 配置 schema（dsh 装配层据此读取配置并生成表单）。
+ * 不标注 `Schema<Config>`：volatile 字段的解析输出是运行引用（`Volatile<T>`），
+ * 与 schema 的入参形状不同，宿主一方同样由 schema 推导（见 dsh-llm 各 provider）。
+ */
+export const Config = Schema.object({
   onStepFailure: Schema.union(['pause', 'auto-recover'])
     .description('步骤失败策略')
     .default('pause'),
   maxAutoRecoveries: Schema.number().description('单步自愈次数上限（仅 auto-recover）').default(2),
   planDir: Schema.string().description('计划文件根目录（相对会话 cwd）').default('.pae'),
+  paeStepModels: PAE_STEP_MODELS_SCHEMA,
+  paeSessionPings: PAE_PINGS_SCHEMA,
 })
 
-/** 真 Agent → 窄结构接口的唯一适配点（todo/write 与 surface replace 均为宿主公开 API）。 */
-function toDriveAgent(agent: Agent): DriveAgent {
+/**
+ * 真 Agent → 窄结构接口的唯一适配点（todo/write 与 surface replace 均为宿主公开 API）。
+ * 导出供单测直接验证适配语义（宿主插件入口额外导出无副作用，加载方只读 name/Config/apply）。
+ */
+export function toDriveAgent(agent: Agent): DriveAgent {
   const session = agent.session
   const drive: DriveSession = {
     // 宿主 Session 无 .events 属性，以 snapshotEvents() 提供全量日志只读快照。
-    events: session.snapshotEvents(),
+    // 必须每次读取都取新快照（getter）：适配器创建时刻的数组会随会话增长而过期，
+    // 而 settle() 的水位线扫描依赖「本步新追加的 turn/end」可见（见其注释）。
+    get events() {
+      return session.snapshotEvents()
+    },
     surface: session.surface,
+    // 系统提示占 surface node 0（首条模型投影消息 role='system'）：宿主只允许
+    // 恰好覆盖该节点的 system/message 改写它，整面 replace 必须绕开。
+    // 用 deriveMessages()（宿主未弃用的模型投影读取，内部有缓存）而非事件日志扫描，
+    // 避免依赖已弃用的同步历史读、也不受适配器创建时刻的日志快照过期影响。
+    hasSystemHead: () => session.deriveMessages()[0]?.role === 'system',
     writeTodos: (todos) => {
       session.append('todo/write', { todos: [...todos] })
     },
@@ -79,7 +106,7 @@ function toDriveAgent(agent: Agent): DriveAgent {
       // 必须以方法形式调用宿主 Session.append（保留 this 绑定）：Session.append
       // 内部读 this.log，抽出为裸函数调用会丢 this 抛 “Cannot read properties of undefined”。
       const event = session.append('user/message', message, {
-        surfaceOp: { op: 'replace', start: SessionSeq(start), end: SessionSeq(end) },
+        surfaceOp: { op: 'replace', startSeq: SessionSeq(start), endSeq: SessionSeq(end) },
         sourceEventSeqs: [...sourceEventSeqs].map((seq) => SessionSeq(seq)),
       })
       return event.seq
@@ -104,7 +131,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => () => scheduleRegistry.dispose(), 'dsh-plan-and-execute: schedule registry')
   /** 每 session 一个编排器；key 是 session 对象本身。 */
   const orchestrators = new WeakMap<object, Orchestrator>()
-  /** sessionId → 编排器（settings/updated 桥接按载荷中的 sessionId 定位）。 */
+  /** sessionId → 编排器（volatile 通道按载荷中的 sessionId 定位）。 */
   const bySessionId = new Map<string, Orchestrator>()
 
   // —— 归档守卫：可选注入闭包引用（settings 同款体例：ctx.inject 等服务可用才回调；
@@ -120,9 +147,11 @@ export function apply(ctx: Context, config: Config): void {
     ).workspaceRegistry
   })
   /** sessionPersistence 服务引用（冷归档会话按 header cwd 定位排期文件；undefined=服务缺失）。 */
-  let sessionPersistence: {
-    list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>>
-  } | undefined
+  let sessionPersistence:
+    | {
+        list(): Promise<ReadonlyArray<{ id: string; cwd?: string }>>
+      }
+    | undefined
   ctx.inject(['sessionPersistence'], (persistenceCtx) => {
     sessionPersistence = (
       persistenceCtx as unknown as {
@@ -183,7 +212,7 @@ export function apply(ctx: Context, config: Config): void {
   const ensure = (agent: Agent): Orchestrator => {
     const existing = orchestrators.get(agent.session as object)
     if (existing !== undefined) return existing
-    // bySessionId 键（注册表槽、settings 桥接定位）与 effects 共用 String(agent.id)
+    // bySessionId 键（注册表槽、通道派发定位）与 effects 共用 String(agent.id)
     const sessionId = String(agent.id)
     const planDir = planDirOf(agent)
     const mask = createToolMask(agent)
@@ -341,7 +370,7 @@ export function apply(ctx: Context, config: Config): void {
     commandCtx.commands.register({
       name: 'plan-and-execute',
       description: 'Plan-and-Execute：规划 → 审批 → 逐步执行（支持确认点与失败暂停）',
-      input: { hint: '<任务描述>', images: true },
+      input: { hint: '<任务描述>', attachments: true },
       handler: async ({ agent, rawInput, attachments }) => {
         const task = rawInput.trim()
         if (task === '') {
@@ -393,120 +422,124 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(createSubmitPlanTool(lookup))
   ctx.tools.register(createReportStepTool(lookup))
 
-  // —— settings 命名空间：模型下拉静默写（pae-step-models）+ 会话查看脉冲
-  //（pae-ping）——两个注册各自独立 try/catch：任一失败（如部署已有同名命名空间）
-  // 只降级对应功能，不互相牵连；两通道均不可用时桥接一并跳过（写通道不可用不影响
-  // 插件其余功能）。载荷按 sessionId 分键定位编排器，无对应编排器的会话静默跳过（幂等容错）。
-  // settings 为可选服务：服务挂在宿主 app 作用域，插件 ctx 的 ctx.get('settings')
-  // 解析不到，须经 ctx.inject(['settings']) 可选注入——与 commands 同款：服务缺失时
-  // 不回调、插件照常加载（headless 等无 settings 部署只降级静默通道）。注册与
-  // settings/updated 监听都放在该作用域内（事件 scope 与命名空间注册同源）。
-  // 命名空间注册各自独立 try/catch：任一失败只降级对应功能，不互相牵连。
-  ctx.inject(['settings'], (settingsCtx) => {
-    const settingsService = settingsCtx.settings as unknown as {
-      register(ns: string, schema: unknown): unknown
-    }
-    let modelsNsRegistered = false
-    let pingNsRegistered = false
-    try {
-      settingsService.register(PAE_MODELS_NS, PAE_MODELS_SCHEMA)
-      modelsNsRegistered = true
-    } catch (error) {
-      ctx.logger.warn(
-        `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_MODELS_NS}（审批卡模型下拉不可用）：${String(error)}`,
-      )
-    }
-    try {
-      settingsService.register(PAE_PING_NS, PAE_PING_SCHEMA)
-      pingNsRegistered = true
-    } catch (error) {
-      ctx.logger.warn(
-        `dsh-plan-and-execute: settings 命名空间注册失败：${PAE_PING_NS}（会话打开重弹不可用）：${String(error)}`,
-      )
-    }
-    if (!modelsNsRegistered && !pingNsRegistered) return
-    settingsCtx.on('settings/updated', (ns: string, next: unknown) => {
-      if (ns === PAE_MODELS_NS) {
-        // —— 模型分支：先 resolveCallConfig 校验可用性，全部失败视为瞬态跳过 ——
-        // 返回 IIFE 的 Promise：宿主监听器容器会接住 rejection 记 warn；
-        // 若 void 吞掉返回值，落盘失败会变成 unhandled rejection（Node≥15 终止进程）。
-        return (async () => {
-          for (const [sessionId, section] of Object.entries(
-            (next ?? {}) as Record<string, unknown>,
-          )) {
-            const orchestrator = bySessionId.get(sessionId)
-            if (orchestrator === undefined) continue
-            const parsed = parsePaeModels(section)
-            const llm = ctx.get('llm') as
-              | {
-                  resolveCallConfig(c: {
-                    provider: string
-                    model: string
-                  }): Promise<{ provider: string; model: string }>
-                }
-              | undefined
-            const resolved: Record<number, { provider: string; model: string }> = {}
-            for (const [stepKey, model] of Object.entries(parsed)) {
-              try {
-                // llm 服务缺失（可选）时不校验、原样应用（applyStepModels 只做结构校验）
-                const ok =
-                  llm === undefined
-                    ? { provider: model.provider, model: model.model }
-                    : await llm.resolveCallConfig({ provider: model.provider, model: model.model })
-                resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
-              } catch (error) {
-                ctx.logger.warn(
-                  `dsh-plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                )
-              }
-            }
-            // 解析出步骤但全部 resolve 失败：视为瞬态不可用，跳过本次应用
-            //（applyStepModels 整体替换语义下空映射会清空既有选择）。
-            const parsedEntries = Object.keys(parsed).length
-            const resolvedEntries = Object.keys(resolved).length
-            if (parsedEntries > 0 && resolvedEntries === 0) {
-              ctx.logger.warn(
-                'dsh-plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
-              )
-              continue
-            }
-            const result = await orchestrator.applyStepModels(resolved)
-            if (!result.ok) {
-              ctx.logger.warn(`dsh-plan-and-execute: 应用步骤模型失败：${result.error}`)
-            }
-          }
-        })()
+  // —— 客户端静默通道：审批卡每步模型选择 + 会话查看脉冲 ——
+  // 客户端把值稀疏合并写进本插件 profile 条目的两个 volatile 字段（ctx.remote.settings.update，
+  // 见 client/channels.ts；条目 id 由客户端按字段名发现，dev/正式安装的 id 不同）。
+  // 宿主侧不改写配置：值就地提交进运行引用后，loader 只通知所属 fiber（loader/volatile-update），
+  // 插件据此读同一 Config 引用的 .get() 派发到编排器。载荷按 sessionId 分键定位编排器，
+  // 无对应编排器的会话静默跳过（幂等容错）；已处理值按 sessionId 记录，同值不重复应用
+  // （一次写入会连带通知未变更字段，重复应用会白写盘并重弹回显卡卡）。
+  const appliedModels = new Map<string, string>()
+  const appliedPings = new Map<string, number>()
+  /** 应用某会话的每步模型选择（resolveCallConfig 校验可用性，全部失败视为瞬态跳过）。 */
+  const applyModelsFor = async (
+    sessionId: string,
+    parsed: Record<number, PaeStepModel>,
+  ): Promise<void> => {
+    const orchestrator = bySessionId.get(sessionId)
+    if (orchestrator === undefined) return
+    const llm = ctx.get('llm') as
+      | {
+          resolveCallConfig(c: {
+            provider: string
+            model: string
+          }): Promise<{ provider: string; model: string }>
+        }
+      | undefined
+    const resolved: Record<number, { provider: string; model: string }> = {}
+    for (const [stepKey, model] of Object.entries(parsed)) {
+      try {
+        // llm 服务缺失（可选）时不校验、原样应用（applyStepModels 只做结构校验）
+        const ok =
+          llm === undefined
+            ? { provider: model.provider, model: model.model }
+            : await llm.resolveCallConfig({ provider: model.provider, model: model.model })
+        resolved[Number(stepKey)] = { provider: ok.provider, model: ok.model }
+      } catch (error) {
+        ctx.logger.warn(
+          `dsh-plan-and-execute: 步骤 ${stepKey} 模型 ${model.provider}/${model.model} 不可用，跳过：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
       }
-      if (ns === PAE_PING_NS) {
-        // —— 会话查看脉冲分支：合法脉冲即对 scheduled 等待期会话重弹回显卡。
-        // reviewScheduledAgain 内部 fire-and-forget（不 await、不阻塞本次监听）；
-        // 其 rejection 在此接住记 warn，避免 unhandled rejection。 ——
-        return (async () => {
-          for (const [sessionId, section] of Object.entries(
-            (next ?? {}) as Record<string, unknown>,
-          )) {
-            const orchestrator = bySessionId.get(sessionId)
-            if (orchestrator === undefined) continue
-            if (!parsePaePing(section)) continue
-            // fire-and-forget：内部收尾（save/run）rejection 在此接住记 warn；
-            // 'asked'/'ignored' 结果不消费（只表达「已发起」）
-            void orchestrator
-              .reviewScheduledAgain()
-              .then(() => undefined)
-              .catch((error) => {
-                ctx.logger.warn(
-                  `dsh-plan-and-execute: 会话打开重弹失败（session ${sessionId}）：${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                )
-              })
-          }
-        })()
-      }
-      return undefined
-    })
+    }
+    // 解析出步骤但全部 resolve 失败：视为瞬态不可用，跳过本次应用
+    //（applyStepModels 整体替换语义下空映射会清空既有选择）。
+    const parsedEntries = Object.keys(parsed).length
+    const resolvedEntries = Object.keys(resolved).length
+    if (parsedEntries > 0 && resolvedEntries === 0) {
+      ctx.logger.warn(
+        'dsh-plan-and-execute: 该会话全部步骤模型不可用，跳过本次应用（保留既有选择）',
+      )
+      return
+    }
+    const result = await orchestrator.applyStepModels(resolved)
+    if (!result.ok) {
+      ctx.logger.warn(`dsh-plan-and-execute: 应用步骤模型失败：${result.error}`)
+    }
+  }
+  /** 会话查看脉冲：合法脉冲即对 scheduled 等待期会话重弹回显卡（fire-and-forget）。 */
+  const applyPingFor = (sessionId: string): void => {
+    const orchestrator = bySessionId.get(sessionId)
+    if (orchestrator === undefined) return
+    // fire-and-forget：内部收尾（save/run）rejection 在此接住记 warn；
+    // 'asked'/'ignored' 结果不消费（只表达「已发起」）
+    void orchestrator
+      .reviewScheduledAgain()
+      .then(() => undefined)
+      .catch((error) => {
+        ctx.logger.warn(
+          `dsh-plan-and-execute: 会话打开重弹失败（session ${sessionId}）：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      })
+  }
+  /** 两通道当前值（程序化装配未提供通道时为空表）。 */
+  const channelValues = (): {
+    models: Record<string, Record<string, PaeStepModel>>
+    pings: Record<string, { t: number }>
+  } => ({
+    models: config.paeStepModels?.get() ?? {},
+    pings: config.paeSessionPings?.get() ?? {},
+  })
+  /** 两个 volatile 字段的当前值 → 编排器（仅派发相对上次快照变化的部分）。 */
+  const applyChannelValues = (): void => {
+    const { models, pings } = channelValues()
+    for (const [sessionId, section] of Object.entries(models)) {
+      if (bySessionId.get(sessionId) === undefined) continue
+      const parsed = parsePaeModels(section)
+      const key = JSON.stringify(parsed)
+      if (appliedModels.get(sessionId) === key) continue
+      appliedModels.set(sessionId, key)
+      // 接住 rejection 记 warn：宿主监听器容器不再兜底（同步监听器无法上抛），
+      // 漏接会变成 unhandled rejection（Node≥15 终止进程）。
+      void Promise.resolve(applyModelsFor(sessionId, parsed)).catch((error: unknown) => {
+        ctx.logger.warn(
+          `dsh-plan-and-execute: 应用步骤模型失败（session ${sessionId}）：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      })
+    }
+    for (const [sessionId, section] of Object.entries(pings)) {
+      if (!parsePaePing(section)) continue
+      const at = (section as { t: number }).t
+      if (appliedPings.get(sessionId) === at) continue
+      appliedPings.set(sessionId, at)
+      applyPingFor(sessionId)
+    }
+  }
+  // 启动快照：现存值视为「已处理」（与宿主重启前语义一致——只有本次进程内新写入的
+  // 变化才派发；否则任意一次无关写入都会把所有历史脉冲重放一遍）。
+  for (const [sessionId, section] of Object.entries(channelValues().models)) {
+    appliedModels.set(sessionId, JSON.stringify(parsePaeModels(section)))
+  }
+  for (const [sessionId, section] of Object.entries(channelValues().pings)) {
+    if (parsePaePing(section)) appliedPings.set(sessionId, (section as { t: number }).t)
+  }
+  ctx.on('loader/volatile-update', () => {
+    applyChannelValues()
   })
 
   // —— 阶段 prompt sections（读编排器内存态；未加载时渲染空）——

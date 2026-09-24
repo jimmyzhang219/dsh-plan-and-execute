@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { PAE_PING_NS, parsePaeModels, parsePaePing, PAE_MODELS_NS } from '../src/settings.ts'
+import {
+  PAE_PINGS_FIELD,
+  PAE_STEP_MODELS_FIELD,
+  parsePaeModels,
+  parsePaePing,
+} from '../src/settings.ts'
 
 describe('parsePaeModels', () => {
   it('合法载荷解析为 {步骤号: {provider, model}}', () => {
@@ -23,8 +28,8 @@ describe('parsePaeModels', () => {
     expect(parsePaeModels(null)).toEqual({})
     expect(parsePaeModels('x')).toEqual({})
   })
-  it('命名空间常量', () => {
-    expect(PAE_MODELS_NS).toBe('pae-step-models')
+  it('通道字段名常量（客户端按字段名定位插件条目）', () => {
+    expect(PAE_STEP_MODELS_FIELD).toBe('paeStepModels')
   })
 })
 
@@ -41,7 +46,7 @@ describe('parsePaePing', () => {
     expect(parsePaePing({ t: Number.NaN })).toBe(false)
     expect(parsePaePing({ t: Number.POSITIVE_INFINITY })).toBe(false)
   })
-  it('命名空间常量', () => {
-    expect(PAE_PING_NS).toBe('pae-ping')
+  it('通道字段名常量', () => {
+    expect(PAE_PINGS_FIELD).toBe('paeSessionPings')
   })
 })
